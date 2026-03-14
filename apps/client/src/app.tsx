@@ -71,6 +71,60 @@ const mergeThreadDetailIntoLocal = (thread: ThreadDetail, existing?: LocalChat):
 });
 const summarizeTitle = (prompt: string) => (prompt.length > 42 ? `${prompt.slice(0, 42)}...` : prompt);
 
+function SettingsIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3.25" />
+      <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a2 2 0 0 1 0 2.8 2 2 0 0 1-2.8 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a2 2 0 0 1-4 0v-.2a1 1 0 0 0-.7-.9 1 1 0 0 0-1.1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a2 2 0 0 1 0-4h.2a1 1 0 0 0 .9-.7 1 1 0 0 0-.2-1.1l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1 1 0 0 0 1.1.2H9a1 1 0 0 0 .6-.9V4a2 2 0 0 1 4 0v.2a1 1 0 0 0 .7.9 1 1 0 0 0 1.1-.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1 1 0 0 0-.2 1.1V9c0 .4.4.7.9.7h.2a2 2 0 0 1 0 4h-.2a1 1 0 0 0-.9.7Z" />
+    </svg>
+  );
+}
+
+function InstallIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3v11" />
+      <path d="m8 10 4 4 4-4" />
+      <path d="M4 17.5A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5" />
+    </svg>
+  );
+}
+
+function PaperclipIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m21.4 11.2-8.5 8.5a6 6 0 1 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />
+    </svg>
+  );
+}
+
+function IconButton({
+  label,
+  onClick,
+  disabled,
+  className,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={className ? `icon-button ${className}` : 'icon-button'}
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function App() {
   const { openPendingGitHubVerification, pendingDeviceAuth, session, signInWithGitHub, signOut, isRestoring } = useAuth();
   const [health, setHealth] = useState<ApiHealth | null>(null);
@@ -656,7 +710,7 @@ export default function App() {
         </div>
         {!isStandalone ? <div className="install-note">On iPhone or iPad, open the browser share menu and choose <strong>Add to Home Screen</strong>.</div> : null}
         <div className="modal-actions">
-          {!isStandalone ? <button className="ghost-button install-cta" onClick={() => void handleInstallApp()}>Install app</button> : null}
+          {!isStandalone ? <button className="ghost-button install-cta" onClick={() => void handleInstallApp()}><InstallIcon />Install app</button> : null}
           <button className="ghost-button" onClick={() => { setSettingsVisible(false); openConnectionSettings(); }}>Connection</button>
           <button className="ghost-button" onClick={() => setSettingsVisible(false)}>Close</button>
           <button className="danger-button" onClick={() => { setSettingsVisible(false); void signOut(); }}>Sign out</button>
@@ -702,10 +756,8 @@ export default function App() {
 
             <div className="modal-actions">
               <button className="button" onClick={handleAuthPress}>{pendingDeviceAuth ? 'Open verification page' : 'Sign in with GitHub'}</button>
-              {!isStandalone ? <button className="ghost-button install-cta" onClick={() => void handleInstallApp()}>Install app</button> : null}
               <button className="ghost-button" onClick={openConnectionSettings}>Connection settings</button>
             </div>
-            {!isStandalone ? <div className="install-note">For Safari on iPhone, use Share → Add to Home Screen.</div> : null}
           </section>
         </div>
         {connectionModal}
@@ -788,11 +840,9 @@ export default function App() {
               </div>
             </div>
             <div className="main-header-actions">
-              <select className="select" value={selectedChat?.model ?? defaultModel} onChange={(event) => selectedChat && updateChat(selectedChat.id, (chat) => ({ ...chat, model: event.target.value }))}>
-                {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-              </select>
-              {!isStandalone ? <button className="ghost-button install-cta" onClick={() => void handleInstallApp()}>Install</button> : null}
-              <button className="ghost-button" onClick={() => setSettingsVisible(true)}>Settings</button>
+              <IconButton label="Open settings" onClick={() => setSettingsVisible(true)}>
+                <SettingsIcon />
+              </IconButton>
             </div>
           </header>
 
@@ -847,9 +897,18 @@ export default function App() {
 
             <textarea className="textarea" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={selectedChat?.projectName ? `Ask about ${selectedChat.projectName}...` : 'Ask anything...'} />
             <div className="composer-toolbar">
-              <div className="composer-footer">
-                <button className="ghost-button" onClick={handleChooseFiles} disabled={uploadingAttachment}>{uploadingAttachment ? 'Uploading...' : 'Attach files'}</button>
-                <div className="helper-text">Files stay thread-local unless you promote them to project knowledge.</div>
+              <div className="composer-tools">
+                <IconButton label={uploadingAttachment ? 'Uploading files' : 'Add files'} onClick={handleChooseFiles} disabled={uploadingAttachment} className={uploadingAttachment ? 'is-busy' : undefined}>
+                  <PaperclipIcon />
+                </IconButton>
+                <select
+                  className="select composer-select"
+                  aria-label="Choose model"
+                  value={selectedChat?.model ?? defaultModel}
+                  onChange={(event) => selectedChat && updateChat(selectedChat.id, (chat) => ({ ...chat, model: event.target.value }))}
+                >
+                  {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+                </select>
               </div>
               <button className="button" onClick={() => void handleSend()} disabled={Boolean(streamingChatId) || !draft.trim()}>
                 {streamingChatId ? 'Streaming...' : 'Send'}

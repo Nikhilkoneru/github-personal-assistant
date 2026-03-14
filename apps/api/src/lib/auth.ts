@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 
+import { env } from '../config';
 import { getAppSession } from '../store/auth-store';
 
 const extractBearerToken = (request: Request) => {
@@ -16,9 +17,31 @@ const extractBearerToken = (request: Request) => {
   return undefined;
 };
 
+const extractServiceToken = (request: Request) => {
+  const header = request.headers['x-service-access-token'];
+  return typeof header === 'string' ? header : undefined;
+};
+
+export const requireServiceAccess = (request: Request, response: Response) => {
+  if (!env.serviceAccessToken) {
+    return true;
+  }
+
+  if (extractServiceToken(request) === env.serviceAccessToken) {
+    return true;
+  }
+
+  response.status(401).json({ error: 'Missing or invalid service access token.' });
+  return false;
+};
+
 export const getRequestSession = (request: Request) => getAppSession(extractBearerToken(request));
 
 export const requireRequestSession = (request: Request, response: Response) => {
+  if (!requireServiceAccess(request, response)) {
+    return null;
+  }
+
   const sessionToken = extractBearerToken(request);
   if (!sessionToken) {
     response.status(401).json({ error: 'You must sign in to use this product.' });

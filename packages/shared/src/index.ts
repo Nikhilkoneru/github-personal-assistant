@@ -14,6 +14,12 @@ export type ApiHealth = {
   status: 'ok';
   copilotConfigured: boolean;
   authConfigured: boolean;
+  apiOrigin: string;
+  publicApiUrl?: string;
+  tailscaleApiUrl?: string;
+  remoteAccessMode: 'local' | 'tailscale' | 'public';
+  remoteAccessConfigured: boolean;
+  ragflowConfigured: boolean;
 };
 
 export type GitHubDeviceAuthStart = {
@@ -39,6 +45,8 @@ export type ModelOption = {
 };
 
 export type AttachmentKind = 'image' | 'document' | 'audio' | 'video' | 'other';
+export type AttachmentScope = 'thread' | 'knowledge';
+export type AttachmentKnowledgeStatus = 'none' | 'pending' | 'indexed' | 'failed';
 
 export type AttachmentSummary = {
   id: string;
@@ -47,6 +55,8 @@ export type AttachmentSummary = {
   size: number;
   kind: AttachmentKind;
   uploadedAt: string;
+  scope: AttachmentScope;
+  knowledgeStatus: AttachmentKnowledgeStatus;
 };
 
 export type ProjectSummary = {
@@ -67,14 +77,36 @@ export type ChatMessage = {
   id: string;
   role: ChatRole;
   content: string;
+  createdAt: string;
   attachments?: AttachmentSummary[];
 };
 
-export type ChatStreamInput = {
+export type ThreadSummary = {
+  id: string;
+  title: string;
   projectId?: string;
+  projectName?: string;
+  model: string;
+  updatedAt: string;
+  createdAt: string;
+  copilotSessionId?: string;
+  lastMessagePreview?: string;
+};
+
+export type ThreadDetail = ThreadSummary & {
+  messages: ChatMessage[];
+};
+
+export type CreateThreadInput = {
+  projectId?: string;
+  title?: string;
+  model?: string;
+};
+
+export type ChatStreamInput = {
+  threadId: string;
   prompt: string;
   model?: string;
-  sessionId?: string;
   attachments?: string[];
 };
 

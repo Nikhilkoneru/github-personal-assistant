@@ -1,37 +1,38 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs/promises';
-import os from 'node:os';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import type { AttachmentKind, AttachmentSummary } from '@github-personal-assistant/shared';
+import type { AttachmentKind, AttachmentSummary, AttachmentScope } from '@github-personal-assistant/shared';
 
+import { env } from '../config';
+import { db, nowIso } from '../db';
 import {
   extractPdfDocumentContext,
   formatPdfContextForPrompt,
   type PdfDocumentContext,
 } from '../services/pdf';
 
-type StoredAttachment = AttachmentSummary & {
-  ownerId: string;
-  filePath: string;
-  pdfContextFilePath?: string;
-  pdfContext?: {
-    extractedAt: string;
-    pageCount: number;
-    extraction: PdfDocumentContext['extraction'];
-    title?: string;
-  };
+type AttachmentRow = {
+  id: string;
+  github_user_id: string;
+  thread_id: string | null;
+  project_id: string | null;
+  name: string;
+  mime_type: string;
+  size: number;
+  kind: AttachmentKind;
+  scope: AttachmentScope;
+  knowledge_status: AttachmentSummary['knowledgeStatus'];
+  file_path: string;
+  pdf_context_file_path: string | null;
+  pdf_extraction: PdfDocumentContext['extraction'] | null;
+  pdf_page_count: number | null;
+  pdf_title: string | null;
+  ragflow_dataset_id: string | null;
+  ragflow_document_id: string | null;
+  uploaded_at: string;
 };
-
-const attachmentCache = new Map<string, StoredAttachment>();
-
-const mediaRoot = path.join(
-  os.homedir(),
-  'Library',
-  'Application Support',
-  'github-personal-assistant',
-  'media',
-);
 
 const sanitizeName = (value: string) =>
   value
@@ -39,180 +40,159 @@ const sanitizeName = (value: string) =>
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '') || 'attachment';
 
+const ownerDirectory = (ownerId: string) => path.join(env.mediaRoot, ownerId);
+const pdfContextPath = (ownerId: string, attachmentId: string) => path.join(ownerDirectory(ownerId), `${attachmentId}.pdf-context.json`);
+
 const getAttachmentKind = (mimeType: string): AttachmentKind => {
   if (mimeType.startsWith('image/')) {
     return 'image';
   }
-
   if (mimeType.startsWith('audio/')) {
     return 'audio';
   }
-
   if (mimeType.startsWith('video/')) {
     return 'video';
   }
-
-  if (
-    mimeType === 'application/pdf' ||
-    mimeType.startsWith('text/') ||
-    mimeType.includes('json') ||
-    mimeType.includes('xml')
-  ) {
+  if (mimeType === 'application/pdf' || mimeType.startsWith('text/') || mimeType.includes('json') || mimeType.includes('xml')) {
     return 'document';
   }
-
   return 'other';
 };
 
-const ownerDirectory = (ownerId: string) => path.join(mediaRoot, ownerId);
-const manifestPath = (ownerId: string, attachmentId: string) =>
-  path.join(ownerDirectory(ownerId), `${attachmentId}.json`);
-const pdfContextPath = (ownerId: string, attachmentId: string) =>
-  path.join(ownerDirectory(ownerId), `${attachmentId}.pdf-context.json`);
-
-const toSummary = (attachment: StoredAttachment): AttachmentSummary => ({
+const toSummary = (attachment: AttachmentRow): AttachmentSummary => ({
   id: attachment.id,
   name: attachment.name,
-  mimeType: attachment.mimeType,
+  mimeType: attachment.mime_type,
   size: attachment.size,
   kind: attachment.kind,
-  uploadedAt: attachment.uploadedAt,
+  uploadedAt: attachment.uploaded_at,
+  scope: attachment.scope,
+  knowledgeStatus: attachment.knowledge_status,
 });
 
-const loadAttachment = async (ownerId: string, attachmentId: string) => {
-  const cached = attachmentCache.get(attachmentId);
-  if (cached && cached.ownerId === ownerId) {
-    return cached;
+const getAttachmentRows = (ownerId: string, attachmentIds: string[]) => {
+  if (attachmentIds.length === 0) {
+    return [] as AttachmentRow[];
   }
 
+  return db
+    .prepare(
+      `SELECT * FROM attachments WHERE github_user_id = ? AND id IN (${attachmentIds.map(() => '?').join(',')}) ORDER BY uploaded_at ASC`,
+    )
+    .all(ownerId, ...attachmentIds) as AttachmentRow[];
+};
+
+const loadPdfContext = async (attachment: AttachmentRow) => {
+  if (attachment.mime_type !== 'application/pdf') {
+    return null;
+  }
+
+  const contextFilePath = attachment.pdf_context_file_path ?? pdfContextPath(attachment.github_user_id, attachment.id);
   try {
-    const raw = await fs.readFile(manifestPath(ownerId, attachmentId), 'utf8');
-    const parsed = JSON.parse(raw) as StoredAttachment;
-    attachmentCache.set(parsed.id, parsed);
-    return parsed;
+    const raw = await fsp.readFile(contextFilePath, 'utf8');
+    return JSON.parse(raw) as PdfDocumentContext;
   } catch {
-    return null;
+    const context = await extractPdfDocumentContext({ filePath: attachment.file_path });
+    await fsp.writeFile(contextFilePath, JSON.stringify(context, null, 2), 'utf8');
+    db.prepare(
+      `UPDATE attachments
+       SET pdf_context_file_path = ?, pdf_extraction = ?, pdf_page_count = ?, pdf_title = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(contextFilePath, context.extraction, context.pageCount, context.title ?? null, nowIso(), attachment.id);
+    return context;
   }
-};
-
-const persistAttachment = async (attachment: StoredAttachment) => {
-  await fs.writeFile(manifestPath(attachment.ownerId, attachment.id), JSON.stringify(attachment, null, 2), 'utf8');
-  attachmentCache.set(attachment.id, attachment);
-};
-
-const ensurePdfContext = async (attachment: StoredAttachment) => {
-  if (attachment.mimeType !== 'application/pdf') {
-    return null;
-  }
-
-  if (attachment.pdfContextFilePath) {
-    try {
-      const raw = await fs.readFile(attachment.pdfContextFilePath, 'utf8');
-      return JSON.parse(raw) as PdfDocumentContext;
-    } catch {
-      // Fall through and rebuild the derived context from the source PDF.
-    }
-  }
-
-  const context = await extractPdfDocumentContext({
-    filePath: attachment.filePath,
-  });
-  const contextFilePath = attachment.pdfContextFilePath ?? pdfContextPath(attachment.ownerId, attachment.id);
-
-  await fs.writeFile(contextFilePath, JSON.stringify(context, null, 2), 'utf8');
-
-  attachment.pdfContextFilePath = contextFilePath;
-  attachment.pdfContext = {
-    extractedAt: context.extractedAt,
-    pageCount: context.pageCount,
-    extraction: context.extraction,
-    title: context.title,
-  };
-
-  await persistAttachment(attachment);
-  return context;
 };
 
 export const saveAttachment = async ({
   ownerId,
+  threadId,
+  projectId,
   originalName,
   mimeType,
   bytes,
 }: {
   ownerId: string;
+  threadId?: string;
+  projectId?: string;
   originalName: string;
   mimeType: string;
   bytes: Buffer;
 }) => {
   const attachmentId = crypto.randomUUID();
-  const uploadedAt = new Date().toISOString();
+  const uploadedAt = nowIso();
   const ownerDir = ownerDirectory(ownerId);
   const storedFileName = `${attachmentId}-${sanitizeName(originalName)}`;
   const filePath = path.join(ownerDir, storedFileName);
-  const attachmentManifestPath = manifestPath(ownerId, attachmentId);
   const attachmentPdfContextPath = pdfContextPath(ownerId, attachmentId);
 
-  await fs.mkdir(ownerDir, { recursive: true });
-  await fs.writeFile(filePath, bytes);
+  await fsp.mkdir(ownerDir, { recursive: true });
+  await fsp.writeFile(filePath, bytes);
 
-  const attachment: StoredAttachment = {
-    id: attachmentId,
-    ownerId,
-    name: originalName,
-    mimeType,
-    size: bytes.byteLength,
-    kind: getAttachmentKind(mimeType),
-    uploadedAt,
-    filePath,
-  };
-
+  let pdfContext: PdfDocumentContext | null = null;
   try {
     if (mimeType === 'application/pdf') {
-      const context = await extractPdfDocumentContext({
-        filePath,
-      });
-
-      await fs.writeFile(attachmentPdfContextPath, JSON.stringify(context, null, 2), 'utf8');
-      attachment.pdfContextFilePath = attachmentPdfContextPath;
-      attachment.pdfContext = {
-        extractedAt: context.extractedAt,
-        pageCount: context.pageCount,
-        extraction: context.extraction,
-        title: context.title,
-      };
+      pdfContext = await extractPdfDocumentContext({ filePath });
+      await fsp.writeFile(attachmentPdfContextPath, JSON.stringify(pdfContext, null, 2), 'utf8');
     }
 
-    await fs.writeFile(attachmentManifestPath, JSON.stringify(attachment, null, 2), 'utf8');
-    attachmentCache.set(attachment.id, attachment);
-    return toSummary(attachment);
+    db.prepare(`
+      INSERT INTO attachments (
+        id, github_user_id, thread_id, project_id, name, mime_type, size, kind, scope,
+        knowledge_status, file_path, pdf_context_file_path, pdf_extraction, pdf_page_count, pdf_title,
+        ragflow_dataset_id, ragflow_document_id, created_at, updated_at, uploaded_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+    `).run(
+      attachmentId,
+      ownerId,
+      threadId ?? null,
+      projectId ?? null,
+      originalName,
+      mimeType,
+      bytes.byteLength,
+      getAttachmentKind(mimeType),
+      'thread',
+      'none',
+      filePath,
+      pdfContext ? attachmentPdfContextPath : null,
+      pdfContext?.extraction ?? null,
+      pdfContext?.pageCount ?? null,
+      pdfContext?.title ?? null,
+      uploadedAt,
+      uploadedAt,
+      uploadedAt,
+    );
+
+    return getAttachmentSummary(ownerId, attachmentId);
   } catch (error) {
-    attachmentCache.delete(attachment.id);
     await Promise.allSettled([
-      fs.rm(filePath, { force: true }),
-      fs.rm(attachmentManifestPath, { force: true }),
-      fs.rm(attachmentPdfContextPath, { force: true }),
+      fsp.rm(filePath, { force: true }),
+      fsp.rm(attachmentPdfContextPath, { force: true }),
     ]);
     throw error;
   }
 };
 
-export const getAttachmentSummaries = async (ownerId: string, attachmentIds: string[]) => {
-  const attachments = await Promise.all(attachmentIds.map((attachmentId) => loadAttachment(ownerId, attachmentId)));
-  return attachments.filter((attachment): attachment is StoredAttachment => Boolean(attachment)).map(toSummary);
+export const getAttachmentRecord = (ownerId: string, attachmentId: string) => {
+  return (
+    (db.prepare('SELECT * FROM attachments WHERE github_user_id = ? AND id = ?').get(ownerId, attachmentId) as AttachmentRow | undefined) ??
+    null
+  );
+};
+
+export const getAttachmentSummary = (ownerId: string, attachmentId: string) => {
+  const row = getAttachmentRecord(ownerId, attachmentId);
+  return row ? toSummary(row) : null;
 };
 
 export const getAttachmentInputs = async (ownerId: string, attachmentIds: string[]) => {
-  const attachments = await Promise.all(attachmentIds.map((attachmentId) => loadAttachment(ownerId, attachmentId)));
-
-  if (attachments.some((attachment) => !attachment)) {
+  const attachments = getAttachmentRows(ownerId, attachmentIds);
+  if (attachments.length !== attachmentIds.length) {
     return null;
   }
 
-  const resolvedAttachments = attachments as StoredAttachment[];
-
-  return resolvedAttachments.map((attachment) => ({
+  return attachments.map((attachment) => ({
     type: 'file' as const,
-    path: attachment.filePath,
+    path: attachment.file_path,
     displayName: attachment.name,
   }));
 };
@@ -226,18 +206,16 @@ export const buildAttachmentPromptContext = async ({
   attachmentIds: string[];
   query: string;
 }) => {
-  const attachments = await Promise.all(attachmentIds.map((attachmentId) => loadAttachment(ownerId, attachmentId)));
-  const resolvedAttachments = attachments.filter((attachment): attachment is StoredAttachment => Boolean(attachment));
-
-  if (resolvedAttachments.length !== attachmentIds.length) {
+  const attachments = getAttachmentRows(ownerId, attachmentIds);
+  if (attachments.length !== attachmentIds.length) {
     return null;
   }
 
   const pdfContexts = await Promise.all(
-    resolvedAttachments
-      .filter((attachment) => attachment.mimeType === 'application/pdf')
+    attachments
+      .filter((attachment) => attachment.mime_type === 'application/pdf')
       .map(async (attachment) => {
-        const context = await ensurePdfContext(attachment);
+        const context = await loadPdfContext(attachment);
         return context
           ? formatPdfContextForPrompt({
               attachmentName: attachment.name,
@@ -250,4 +228,65 @@ export const buildAttachmentPromptContext = async ({
 
   const promptSections = pdfContexts.filter((section): section is string => Boolean(section));
   return promptSections.length > 0 ? promptSections.join('\n\n---\n\n') : '';
+};
+
+export const promoteAttachmentToKnowledge = (input: {
+  ownerId: string;
+  attachmentId: string;
+  projectId: string;
+  datasetId: string;
+  documentId: string;
+}) => {
+  db.prepare(
+    `UPDATE attachments
+     SET scope = 'knowledge', knowledge_status = 'pending', project_id = ?, ragflow_dataset_id = ?, ragflow_document_id = ?, updated_at = ?
+     WHERE github_user_id = ? AND id = ?`,
+  ).run(input.projectId, input.datasetId, input.documentId, nowIso(), input.ownerId, input.attachmentId);
+
+  return getAttachmentSummary(input.ownerId, input.attachmentId);
+};
+
+export const updateAttachmentKnowledgeStatus = (input: {
+  ownerId: string;
+  attachmentId: string;
+  knowledgeStatus: AttachmentSummary['knowledgeStatus'];
+}) => {
+  db.prepare('UPDATE attachments SET knowledge_status = ?, updated_at = ? WHERE github_user_id = ? AND id = ?').run(
+    input.knowledgeStatus,
+    nowIso(),
+    input.ownerId,
+    input.attachmentId,
+  );
+  return getAttachmentSummary(input.ownerId, input.attachmentId);
+};
+
+export const getKnowledgeAttachmentsForProject = (ownerId: string, projectId: string) =>
+  (db
+    .prepare(
+      `SELECT * FROM attachments
+       WHERE github_user_id = ? AND project_id = ? AND scope = 'knowledge'
+       ORDER BY uploaded_at DESC`,
+    )
+    .all(ownerId, projectId) as AttachmentRow[]);
+
+export const getPdfContextForAttachments = (attachmentIds: string[], ownerId: string) => {
+  const attachments = getAttachmentRows(ownerId, attachmentIds);
+  const contexts: Array<{ attachmentName: string; context: PdfDocumentContext }> = [];
+  for (const attachment of attachments) {
+    if (!attachment.pdf_context_file_path) {
+      continue;
+    }
+
+    try {
+      const raw = fs.readFileSync(attachment.pdf_context_file_path, 'utf8');
+      contexts.push({
+        attachmentName: attachment.name,
+        context: JSON.parse(raw) as PdfDocumentContext,
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return contexts;
 };

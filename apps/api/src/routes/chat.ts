@@ -1,30 +1,32 @@
-import crypto from 'node:crypto';
-
 import { Router, type Response } from 'express';
 import { z } from 'zod';
 
-import type { ChatStreamEvent } from '@github-personal-assistant/shared';
+import type { ChatRole, ChatStreamEvent } from '@github-personal-assistant/shared';
 
 import { env } from '../config';
 import { requireRequestSession } from '../lib/auth';
 import { getOrCreateSession } from '../services/copilot';
+import { buildKnowledgePromptContext } from '../services/retrieval';
 import { buildAttachmentPromptContext, getAttachmentInputs } from '../store/attachment-store';
+import {
+  createMessage,
+  getThread,
+  getThreadDetail,
+  linkMessageAttachments,
+  renameThreadIfPlaceholder,
+  updateMessage,
+  updateThreadModel,
+  updateThreadSession,
+} from '../store/thread-store';
 import { getProject } from '../store/project-store';
 
 const router = Router();
 
-const historyMessageSchema = z.object({
-  role: z.enum(['user', 'assistant', 'system', 'error']),
-  content: z.string(),
-});
-
 const chatSchema = z.object({
-  projectId: z.string().trim().min(1).optional(),
+  threadId: z.string().trim().min(1),
   prompt: z.string().trim().min(1).max(8000),
   model: z.string().trim().optional(),
-  sessionId: z.string().trim().optional(),
   attachments: z.array(z.string().trim().min(1)).max(5).optional(),
-  history: z.array(historyMessageSchema).optional(),
 });
 
 type SessionLike = {
@@ -67,6 +69,17 @@ const waitForIdle = (session: SessionLike) =>
     });
   });
 
+const summarizeTitle = (prompt: string) => {
+  const singleLine = prompt.replace(/\s+/g, ' ').trim();
+  return singleLine.length > 42 ? `${singleLine.slice(0, 42)}...` : singleLine;
+};
+
+const historyToPrompt = (messages: Array<{ role: ChatRole; content: string }>) =>
+  messages
+    .filter((message) => message.role === 'user' || message.role === 'assistant' || message.role === 'system')
+    .map((message) => `${message.role}: ${message.content}`)
+    .join('\n');
+
 router.post('/api/chat/stream', async (request, response) => {
   const parsed = chatSchema.safeParse(request.body);
   if (!parsed.success) {
@@ -80,16 +93,14 @@ router.post('/api/chat/stream', async (request, response) => {
   }
 
   const ownerId = String(userSession.user.id);
-  const project = parsed.data.projectId ? getProject(ownerId, parsed.data.projectId) : null;
-
-  if (parsed.data.projectId && !project) {
-    response.status(404).json({ error: 'Project not found.' });
+  const thread = getThread(ownerId, parsed.data.threadId);
+  if (!thread) {
+    response.status(404).json({ error: 'Thread not found.' });
     return;
   }
 
-  const sessionId =
-    parsed.data.sessionId ??
-    `user-${ownerId}-${project ? `project-${project.id}` : 'chat'}-${Date.now()}`;
+  const project = thread.projectId ? getProject(ownerId, thread.projectId) : null;
+  const sessionId = thread.copilotSessionId ?? `thread-${thread.id}`;
 
   response.setHeader('Content-Type', 'text/event-stream');
   response.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -105,26 +116,26 @@ router.post('/api/chat/stream', async (request, response) => {
   let unsubscribeMessage: (() => void) | null = null;
   let streamedContent = '';
 
-  try {
-    const attachments =
-      parsed.data.attachments && parsed.data.attachments.length > 0
-        ? await getAttachmentInputs(ownerId, parsed.data.attachments)
-        : [];
+  const assistantMessageId = createMessage(thread.id, 'assistant', '');
 
-    if (parsed.data.attachments && !attachments) {
+  try {
+    const historicalThread = getThreadDetail(ownerId, thread.id);
+    const priorMessages = historicalThread ? historicalThread.messages.filter((message) => message.id !== assistantMessageId) : [];
+    const attachmentInputs = parsed.data.attachments && parsed.data.attachments.length > 0 ? await getAttachmentInputs(ownerId, parsed.data.attachments) : [];
+
+    if (parsed.data.attachments && !attachmentInputs) {
       writeEvent(response, { type: 'error', message: 'One or more attachments could not be found.' });
       response.end();
       return;
     }
 
-    const attachmentPromptContext =
-      parsed.data.attachments && parsed.data.attachments.length > 0
-        ? await buildAttachmentPromptContext({
-            ownerId,
-            attachmentIds: parsed.data.attachments,
-            query: parsed.data.prompt,
-          })
-        : '';
+    const attachmentPromptContext = parsed.data.attachments?.length
+      ? await buildAttachmentPromptContext({
+          ownerId,
+          attachmentIds: parsed.data.attachments,
+          query: parsed.data.prompt,
+        })
+      : '';
 
     if (parsed.data.attachments && attachmentPromptContext === null) {
       writeEvent(response, { type: 'error', message: 'One or more attachments could not be found.' });
@@ -132,23 +143,41 @@ router.post('/api/chat/stream', async (request, response) => {
       return;
     }
 
-    const enrichedPrompt = attachmentPromptContext
-      ? [
-          parsed.data.prompt,
-          'The attached PDF files were preprocessed locally. Use the extracted page text below as grounding context, and cite page numbers when they support your answer.',
-          attachmentPromptContext,
-        ].join('\n\n')
-      : parsed.data.prompt;
+    const knowledgePromptContext = await buildKnowledgePromptContext({
+      ownerId,
+      threadId: thread.id,
+      query: parsed.data.prompt,
+    });
 
-    const promptWithHistory = [
-      ...(parsed.data.history ?? []).map((message) => `${message.role}: ${message.content}`),
-      `user: ${enrichedPrompt}`,
-    ].join('\n');
+    const enrichedPrompt = [
+      parsed.data.prompt,
+      knowledgePromptContext
+        ? ['Use the following project knowledge retrieved from RagFlow before answering.', knowledgePromptContext].join('\n\n')
+        : null,
+      attachmentPromptContext
+        ? ['Use the following locally extracted attachment context when it helps answer the latest request.', attachmentPromptContext].join('\n\n')
+        : null,
+    ]
+      .filter((section): section is string => Boolean(section))
+      .join('\n\n');
+
+    const promptWithHistory = [historyToPrompt(priorMessages), `user: ${enrichedPrompt}`].filter(Boolean).join('\n');
+
+    const userMessageId = createMessage(thread.id, 'user', parsed.data.prompt);
+    if (parsed.data.attachments?.length) {
+      linkMessageAttachments(userMessageId, parsed.data.attachments);
+    }
+
+    renameThreadIfPlaceholder(thread.id, summarizeTitle(parsed.data.prompt));
+
+    const model = parsed.data.model ?? thread.model ?? project?.defaultModel ?? env.defaultModel;
+    updateThreadModel(thread.id, model);
+    updateThreadSession(thread.id, sessionId);
 
     session = (await getOrCreateSession({
       sessionId,
       githubToken: userSession.githubAccessToken,
-      model: parsed.data.model ?? project?.defaultModel ?? env.defaultModel,
+      model,
       systemMessage: project?.instructions,
     })) as unknown as SessionLike;
 
@@ -158,10 +187,13 @@ router.post('/api/chat/stream', async (request, response) => {
           ? (event as { data?: { deltaContent?: string } }).data!.deltaContent!
           : '';
 
-      if (delta) {
-        streamedContent += delta;
-        writeEvent(response, { type: 'chunk', delta });
+      if (!delta) {
+        return;
       }
+
+      streamedContent += delta;
+      updateMessage(assistantMessageId, { content: streamedContent });
+      writeEvent(response, { type: 'chunk', delta });
     });
 
     unsubscribeMessage = session.on('assistant.message', (event: unknown) => {
@@ -174,27 +206,17 @@ router.post('/api/chat/stream', async (request, response) => {
         return;
       }
 
-      const remainingContent =
-        streamedContent && content.startsWith(streamedContent)
-          ? content.slice(streamedContent.length)
-          : !streamedContent
-            ? content
-            : '';
-
-      if (remainingContent) {
-        streamedContent += remainingContent;
-        writeEvent(response, { type: 'chunk', delta: remainingContent });
-      }
+      streamedContent = content;
+      updateMessage(assistantMessageId, { content });
     });
 
-    await session.send({ prompt: promptWithHistory, attachments: attachments ?? [] });
+    await session.send({ prompt: promptWithHistory, attachments: attachmentInputs ?? [] });
     await waitForIdle(session);
     writeEvent(response, { type: 'done' });
   } catch (error) {
-    writeEvent(response, {
-      type: 'error',
-      message: error instanceof Error ? error.message : 'Unknown streaming error.',
-    });
+    const message = error instanceof Error ? error.message : 'Unknown streaming error.';
+    updateMessage(assistantMessageId, { content: message, role: 'error' });
+    writeEvent(response, { type: 'error', message });
   } finally {
     unsubscribeDelta?.();
     unsubscribeMessage?.();

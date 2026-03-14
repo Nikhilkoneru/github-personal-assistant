@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { AppSessionUser, GitHubDeviceAuthPoll } from '@github-personal-assistant/shared';
 
 import { env, isDeviceOAuthConfigured, isOAuthConfigured } from '../config';
-import { getRequestSession } from '../lib/auth';
+import { getRequestSession, requireServiceAccess } from '../lib/auth';
 import {
   completeDeviceAuth,
   consumeOAuthState,
@@ -76,17 +76,29 @@ const createSessionFromGitHubAccessToken = async (accessToken: string) =>
   createAppSession(accessToken, await getGitHubUser(accessToken));
 
 router.get('/api/auth/session', (request, response) => {
+  if (!requireServiceAccess(request, response)) {
+    return;
+  }
+
   const session = getRequestSession(request);
   response.json({ session: session ? { sessionToken: session.sessionToken, user: session.user } : null });
 });
 
 router.post('/api/auth/logout', (request, response) => {
+  if (!requireServiceAccess(request, response)) {
+    return;
+  }
+
   const session = getRequestSession(request);
   destroyAppSession(session?.sessionToken);
   response.status(204).end();
 });
 
 router.get('/api/auth/github/url', (request, response) => {
+  if (!requireServiceAccess(request, response)) {
+    return;
+  }
+
   if (!isOAuthConfigured()) {
     response.status(503).json({ error: 'GitHub OAuth is not configured on the backend yet.' });
     return;
@@ -109,6 +121,10 @@ router.get('/api/auth/github/url', (request, response) => {
 });
 
 router.post('/api/auth/github/device/start', async (_request, response) => {
+  if (!requireServiceAccess(_request, response)) {
+    return;
+  }
+
   if (!isDeviceOAuthConfigured()) {
     response.status(503).json({ error: DEVICE_AUTH_CONFIG_ERROR });
     return;
@@ -150,6 +166,10 @@ router.post('/api/auth/github/device/start', async (_request, response) => {
 });
 
 router.get('/api/auth/github/device/:flowId', async (request, response) => {
+  if (!requireServiceAccess(request, response)) {
+    return;
+  }
+
   if (!isDeviceOAuthConfigured()) {
     response.status(503).json({ error: DEVICE_AUTH_CONFIG_ERROR });
     return;
@@ -171,7 +191,7 @@ router.get('/api/auth/github/device/:flowId', async (request, response) => {
     return;
   }
 
-  if (Date.now() < deviceAuth.nextPollAt) {
+  if (Date.now() < new Date(deviceAuth.nextPollAt).getTime()) {
     response.json(currentPayload);
     return;
   }

@@ -12,23 +12,41 @@ import {
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 
-import type { AttachmentSummary, ApiHealth, ChatMessage, ModelOption, ProjectSummary } from '@github-personal-assistant/shared';
+import type {
+  AttachmentSummary,
+  ApiHealth,
+  ChatMessage,
+  ModelOption,
+  ProjectSummary,
+  ThreadDetail,
+  ThreadSummary,
+} from '@github-personal-assistant/shared';
 
 import { MessageBubble } from '@/components/message-bubble';
 import { Screen } from '@/components/screen';
-import { createProject, getHealth, getModels, getProjects, streamChat, uploadAttachment } from '@/lib/api';
+import {
+  createProject,
+  createThread,
+  getHealth,
+  getModels,
+  getProjects,
+  getThread,
+  getThreads,
+  promoteAttachmentToKnowledge,
+  streamChat,
+  uploadAttachment,
+} from '@/lib/api';
+import {
+  clearApiUrlOverride,
+  getApiUrlOverride,
+  getDefaultApiUrl,
+  setApiUrlOverride,
+} from '@/lib/api-config';
 import { useAuth } from '@/providers/auth-provider';
 
-type LocalChat = {
-  id: string;
-  title: string;
-  projectId?: string;
-  projectName?: string;
-  sessionId?: string;
-  model: string;
-  messages: ChatMessage[];
+type LocalChat = ThreadDetail & {
   draftAttachments: AttachmentSummary[];
-  updatedAt: string;
+  hasLoadedMessages: boolean;
 };
 
 const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -41,36 +59,29 @@ const createMessage = (
   id: createId(),
   role,
   content,
+  createdAt: new Date().toISOString(),
   ...(attachments && attachments.length > 0 ? { attachments } : {}),
 });
 
-const summarizeTitle = (prompt: string) => {
-  const singleLine = prompt.replace(/\s+/g, ' ').trim();
-  return singleLine.length > 42 ? `${singleLine.slice(0, 42)}...` : singleLine;
-};
-
-const buildChat = ({
-  model,
-  project,
-}: {
-  model: string;
-  project?: ProjectSummary;
-}): LocalChat => ({
-  id: createId(),
-  title: project ? project.name : 'New chat',
-  projectId: project?.id,
-  projectName: project?.name,
-  model: project?.defaultModel ?? model,
+const toLocalChatSummary = (thread: ThreadSummary): LocalChat => ({
+  ...thread,
+  messages: [],
   draftAttachments: [],
-  updatedAt: new Date().toISOString(),
-  messages: [
-    createMessage(
-      'assistant',
-      project
-        ? `Project context is attached for ${project.name}. Ask anything and real Copilot errors will appear inline.`
-        : 'Start a new conversation. Projects are optional, and real Copilot errors will appear inline.',
-    ),
-  ],
+  hasLoadedMessages: false,
+});
+
+const mergeThreadIntoLocal = (thread: ThreadSummary, existing?: LocalChat): LocalChat => ({
+  ...thread,
+  messages: existing?.messages ?? [],
+  draftAttachments: existing?.draftAttachments ?? [],
+  hasLoadedMessages: existing?.hasLoadedMessages ?? false,
+});
+
+const mergeThreadDetailIntoLocal = (thread: ThreadDetail, existing?: LocalChat): LocalChat => ({
+  ...thread,
+  messages: thread.messages,
+  draftAttachments: existing?.draftAttachments ?? [],
+  hasLoadedMessages: true,
 });
 
 export default function HomeScreen() {
@@ -88,13 +99,26 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [creatingProject, setCreatingProject] = useState(false);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [promotingAttachmentId, setPromotingAttachmentId] = useState<string | null>(null);
   const [streamingChatId, setStreamingChatId] = useState<string | null>(null);
   const [settingsVisible, setSettingsVisible] = useState(false);
+  const [connectionSettingsVisible, setConnectionSettingsVisible] = useState(false);
   const [modelPickerVisible, setModelPickerVisible] = useState(false);
+  const [apiUrlInput, setApiUrlInput] = useState(getDefaultApiUrl());
+  const [savedApiUrlOverride, setSavedApiUrlOverride] = useState<string | null>(null);
+  const [savingConnection, setSavingConnection] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesScrollRef = useRef<ScrollView>(null);
 
   const defaultModel = models[0]?.id ?? 'gpt-5-mini';
+  const suggestedApiUrl = health?.tailscaleApiUrl ?? health?.publicApiUrl ?? health?.apiOrigin ?? null;
+  const activeApiUrl = savedApiUrlOverride ?? suggestedApiUrl ?? getDefaultApiUrl();
+  const remoteAccessLabel =
+    health?.remoteAccessMode === 'tailscale'
+      ? 'Tailscale'
+      : health?.remoteAccessMode === 'public'
+        ? 'Public URL'
+        : 'Local only';
 
   useEffect(() => {
     if (!session) {
@@ -106,16 +130,66 @@ export default function HomeScreen() {
     }
   }, [session]);
 
+  const refreshConnectionState = useCallback(async () => {
+    const storedOverride = await getApiUrlOverride();
+    setSavedApiUrlOverride(storedOverride);
+    setApiUrlInput(storedOverride ?? getDefaultApiUrl());
+  }, []);
+
+  useEffect(() => {
+    void refreshConnectionState();
+  }, [refreshConnectionState]);
+
   const updateChat = useCallback((chatId: string, updater: (chat: LocalChat) => LocalChat) => {
     setChats((current) => current.map((chat) => (chat.id === chatId ? updater(chat) : chat)));
   }, []);
 
-  const ensureSelectedChat = useCallback((availableModels: ModelOption[]) => {
-    const initialModel = availableModels[0]?.id ?? 'gpt-5-mini';
-    const chat = buildChat({ model: initialModel });
-    setChats([chat]);
-    setSelectedChatId(chat.id);
+  const upsertThreadSummary = useCallback((thread: ThreadSummary) => {
+    setChats((current) => {
+      const existing = current.find((chat) => chat.id === thread.id);
+      if (existing) {
+        return current.map((chat) => (chat.id === thread.id ? mergeThreadIntoLocal(thread, chat) : chat));
+      }
+
+      return [toLocalChatSummary(thread), ...current];
+    });
   }, []);
+
+  const upsertThreadDetail = useCallback((thread: ThreadDetail) => {
+    setChats((current) => {
+      const existing = current.find((chat) => chat.id === thread.id);
+      const next = mergeThreadDetailIntoLocal(thread, existing);
+      if (existing) {
+        return current.map((chat) => (chat.id === thread.id ? next : chat));
+      }
+
+      return [next, ...current];
+    });
+  }, []);
+
+  const loadThreadDetail = useCallback(
+    async (threadId: string) => {
+      if (!session) {
+        return null;
+      }
+
+      const payload = await getThread(threadId, session.sessionToken);
+      upsertThreadDetail(payload.thread);
+      return payload.thread;
+    },
+    [session, upsertThreadDetail],
+  );
+
+  const ensureInitialThread = useCallback(async () => {
+    if (!session) {
+      return null;
+    }
+
+    const payload = await createThread({}, session.sessionToken);
+    upsertThreadSummary(payload.thread);
+    setSelectedChatId(payload.thread.id);
+    return loadThreadDetail(payload.thread.id);
+  }, [loadThreadDetail, session, upsertThreadSummary]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -128,28 +202,35 @@ export default function HomeScreen() {
         return;
       }
 
-      const [healthPayload, projectsPayload, modelsPayload] = await Promise.all([
+      const [healthPayload, projectsPayload, modelsPayload, threadsPayload] = await Promise.all([
         getHealth(),
         getProjects(session.sessionToken),
         getModels(session.sessionToken),
+        getThreads(session.sessionToken),
       ]);
 
       setHealth(healthPayload);
       setProjects(projectsPayload.projects);
       setModels(modelsPayload.models);
-
       setChats((current) => {
-        if (current.length > 0) {
-          return current.map((chat) => ({
-            ...chat,
-            model: chat.model || modelsPayload.models[0]?.id || 'gpt-5-mini',
-          }));
-        }
-
-        const chat = buildChat({ model: modelsPayload.models[0]?.id ?? 'gpt-5-mini' });
-        setSelectedChatId(chat.id);
-        return [chat];
+        const existingById = new Map(current.map((chat) => [chat.id, chat]));
+        return threadsPayload.threads.map((thread) => mergeThreadIntoLocal(thread, existingById.get(thread.id)));
       });
+
+      if (threadsPayload.threads.length === 0) {
+        await ensureInitialThread();
+        return;
+      }
+
+      const nextSelectedChatId =
+        (selectedChatId && threadsPayload.threads.some((thread) => thread.id === selectedChatId) ? selectedChatId : undefined) ??
+        threadsPayload.threads[0]?.id ??
+        null;
+
+      if (nextSelectedChatId) {
+        setSelectedChatId(nextSelectedChatId);
+        await loadThreadDetail(nextSelectedChatId);
+      }
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : 'Failed to load the assistant.';
       setError(message);
@@ -160,17 +241,11 @@ export default function HomeScreen() {
     } finally {
       setLoading(false);
     }
-  }, [session, signOut]);
+  }, [ensureInitialThread, loadThreadDetail, selectedChatId, session, signOut]);
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    if (session && !loading && chats.length === 0) {
-      ensureSelectedChat(models);
-    }
-  }, [chats.length, ensureSelectedChat, loading, models, session]);
 
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? chats[0] ?? null,
@@ -204,21 +279,84 @@ export default function HomeScreen() {
     });
   }, [openPendingGitHubVerification, pendingDeviceAuth, signInWithGitHub]);
 
-  const handleCreateChat = useCallback(() => {
-    const chat = buildChat({ model: defaultModel });
-    setChats((current) => [chat, ...current]);
-    setSelectedChatId(chat.id);
-    setDraft('');
-  }, [defaultModel]);
+  const openConnectionSettings = useCallback(() => {
+    setError(null);
+    void refreshConnectionState();
+    setConnectionSettingsVisible(true);
+  }, [refreshConnectionState]);
+
+  const handleSaveConnection = useCallback(async () => {
+    setSavingConnection(true);
+    setError(null);
+
+    try {
+      const normalizedUrl = apiUrlInput.trim().replace(/\/+$/, '');
+      if (!normalizedUrl || normalizedUrl === getDefaultApiUrl()) {
+        await clearApiUrlOverride();
+      } else {
+        await setApiUrlOverride(normalizedUrl);
+      }
+
+      await refreshConnectionState();
+      setConnectionSettingsVisible(false);
+      await load();
+    } catch (connectionError) {
+      setError(connectionError instanceof Error ? connectionError.message : 'Unable to save the API endpoint.');
+    } finally {
+      setSavingConnection(false);
+    }
+  }, [apiUrlInput, load, refreshConnectionState]);
+
+  const handleResetConnection = useCallback(async () => {
+    setSavingConnection(true);
+    setError(null);
+
+    try {
+      await clearApiUrlOverride();
+      await refreshConnectionState();
+      await load();
+    } catch (connectionError) {
+      setError(connectionError instanceof Error ? connectionError.message : 'Unable to reset the API endpoint.');
+    } finally {
+      setSavingConnection(false);
+    }
+  }, [load, refreshConnectionState]);
+
+  const handleCreateChat = useCallback(async () => {
+    if (!session) {
+      return;
+    }
+
+    setError(null);
+    try {
+      const payload = await createThread({}, session.sessionToken);
+      upsertThreadSummary(payload.thread);
+      setSelectedChatId(payload.thread.id);
+      await loadThreadDetail(payload.thread.id);
+      setDraft('');
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : 'Unable to create chat.');
+    }
+  }, [loadThreadDetail, session, upsertThreadSummary]);
 
   const handleStartProjectChat = useCallback(
-    (project: ProjectSummary) => {
-      const chat = buildChat({ model: defaultModel, project });
-      setChats((current) => [chat, ...current]);
-      setSelectedChatId(chat.id);
-      setDraft('');
+    async (project: ProjectSummary) => {
+      if (!session) {
+        return;
+      }
+
+      setError(null);
+      try {
+        const payload = await createThread({ projectId: project.id, model: project.defaultModel }, session.sessionToken);
+        upsertThreadSummary(payload.thread);
+        setSelectedChatId(payload.thread.id);
+        await loadThreadDetail(payload.thread.id);
+        setDraft('');
+      } catch (createError) {
+        setError(createError instanceof Error ? createError.message : 'Unable to create project chat.');
+      }
     },
-    [defaultModel],
+    [loadThreadDetail, session, upsertThreadSummary],
   );
 
   const handleCreateProject = useCallback(async () => {
@@ -251,6 +389,23 @@ export default function HomeScreen() {
       setModelPickerVisible(false);
     },
     [selectedChat, updateChat],
+  );
+
+  const handleSelectChat = useCallback(
+    async (chatId: string) => {
+      setSelectedChatId(chatId);
+      const chat = chats.find((item) => item.id === chatId);
+      if (chat?.hasLoadedMessages) {
+        return;
+      }
+
+      try {
+        await loadThreadDetail(chatId);
+      } catch (loadError) {
+        setError(loadError instanceof Error ? loadError.message : 'Unable to load that chat.');
+      }
+    },
+    [chats, loadThreadDetail],
   );
 
   const handleAddAttachment = useCallback(async () => {
@@ -290,6 +445,10 @@ export default function HomeScreen() {
             file: 'file' in asset ? asset.file : undefined,
           },
           session.sessionToken,
+          {
+            threadId: selectedChat.id,
+            projectId: selectedChat.projectId,
+          },
         );
         uploadedAttachments.push(payload.attachment);
       }
@@ -306,6 +465,32 @@ export default function HomeScreen() {
       setUploadingAttachment(false);
     }
   }, [selectedChat, session, updateChat, uploadingAttachment]);
+
+  const handlePromoteAttachment = useCallback(
+    async (attachmentId: string) => {
+      if (!session || !selectedChat?.projectId) {
+        return;
+      }
+
+      setPromotingAttachmentId(attachmentId);
+      setError(null);
+
+      try {
+        const payload = await promoteAttachmentToKnowledge(attachmentId, { projectId: selectedChat.projectId }, session.sessionToken);
+        updateChat(selectedChat.id, (chat) => ({
+          ...chat,
+          draftAttachments: chat.draftAttachments.map((attachment) =>
+            attachment.id === attachmentId ? payload.attachment : attachment,
+          ),
+        }));
+      } catch (promoteError) {
+        setError(promoteError instanceof Error ? promoteError.message : 'Unable to add that file to project knowledge.');
+      } finally {
+        setPromotingAttachmentId(null);
+      }
+    },
+    [selectedChat, session, updateChat],
+  );
 
   const handleRemoveAttachment = useCallback(
     (attachmentId: string) => {
@@ -330,8 +515,6 @@ export default function HomeScreen() {
     const assistantMessageId = createId();
     const chatId = selectedChat.id;
     const model = selectedChat.model || defaultModel;
-    const projectId = selectedChat.projectId;
-    const sessionId = selectedChat.sessionId;
     const messageAttachments = selectedChat.draftAttachments;
     let pendingDelta = '';
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -370,30 +553,30 @@ export default function HomeScreen() {
     setStreamingChatId(chatId);
     updateChat(chatId, (chat) => ({
       ...chat,
-      title: chat.title === 'New chat' ? summarizeTitle(prompt) : chat.title,
+      title: chat.title === 'New chat' ? prompt.slice(0, 42) : chat.title,
       model,
       updatedAt: new Date().toISOString(),
       draftAttachments: [],
       messages: [
         ...chat.messages,
         createMessage('user', prompt, messageAttachments),
-        { id: assistantMessageId, role: 'assistant', content: '' },
+        { id: assistantMessageId, role: 'assistant', content: '', createdAt: new Date().toISOString() },
       ],
+      hasLoadedMessages: true,
     }));
 
     try {
       await streamChat(
         {
-          projectId,
+          threadId: chatId,
           prompt,
           model,
-          sessionId,
           attachments: messageAttachments.map((attachment) => attachment.id),
         },
         session.sessionToken,
         (event) => {
           if (event.type === 'session') {
-            updateChat(chatId, (chat) => ({ ...chat, sessionId: event.sessionId }));
+            updateChat(chatId, (chat) => ({ ...chat, copilotSessionId: event.sessionId }));
             return;
           }
 
@@ -422,6 +605,8 @@ export default function HomeScreen() {
           }
         },
       );
+
+      await loadThreadDetail(chatId);
     } catch (sendError) {
       if (flushTimer !== null) {
         clearTimeout(flushTimer);
@@ -450,7 +635,7 @@ export default function HomeScreen() {
       flushPendingDelta();
       setStreamingChatId(null);
     }
-  }, [defaultModel, draft, selectedChat, session, signOut, streamingChatId, updateChat]);
+  }, [defaultModel, draft, loadThreadDetail, selectedChat, session, signOut, streamingChatId, updateChat]);
 
   const renderPendingDeviceAuth = () => {
     if (!pendingDeviceAuth) {
@@ -500,6 +685,11 @@ export default function HomeScreen() {
             <Pressable style={styles.primaryButton} onPress={handleAuthPress}>
               <Text style={styles.primaryButtonText}>{pendingDeviceAuth ? 'Open verification page' : 'Sign in with GitHub'}</Text>
             </Pressable>
+            <Text style={styles.helperText}>Daemon endpoint: {activeApiUrl}</Text>
+
+            <Pressable style={styles.secondaryButton} onPress={openConnectionSettings}>
+              <Text style={styles.secondaryButtonText}>Connection settings</Text>
+            </Pressable>
           </View>
         </View>
       </Screen>
@@ -515,7 +705,7 @@ export default function HomeScreen() {
             <Text style={styles.sidebarSubtitle}>@{session.user.login}</Text>
           </View>
 
-          <Pressable style={styles.newChatButton} onPress={handleCreateChat}>
+          <Pressable style={styles.newChatButton} onPress={() => void handleCreateChat()}>
             <Text style={styles.primaryButtonText}>+ New chat</Text>
           </Pressable>
 
@@ -529,10 +719,12 @@ export default function HomeScreen() {
                     <Pressable
                       key={chat.id}
                       style={[styles.sidebarItem, active && styles.sidebarItemActive]}
-                      onPress={() => setSelectedChatId(chat.id)}
+                      onPress={() => {
+                        void handleSelectChat(chat.id);
+                      }}
                     >
                       <Text style={styles.sidebarItemTitle}>{chat.title}</Text>
-                      <Text style={styles.sidebarItemMeta}>{chat.projectName ?? 'General chat'}</Text>
+                      <Text style={styles.sidebarItemMeta}>{chat.projectName ?? chat.lastMessagePreview ?? 'General chat'}</Text>
                     </Pressable>
                   );
                 })}
@@ -554,7 +746,9 @@ export default function HomeScreen() {
                 />
                 <Pressable
                   style={[styles.secondaryButton, creatingProject && styles.disabledButton]}
-                  onPress={handleCreateProject}
+                  onPress={() => {
+                    void handleCreateProject();
+                  }}
                   disabled={creatingProject}
                 >
                   <Text style={styles.secondaryButtonText}>{creatingProject ? 'Creating...' : 'Add project'}</Text>
@@ -562,7 +756,13 @@ export default function HomeScreen() {
               </View>
               <View style={styles.sidebarList}>
                 {projects.map((project) => (
-                  <Pressable key={project.id} style={styles.sidebarItem} onPress={() => handleStartProjectChat(project)}>
+                  <Pressable
+                    key={project.id}
+                    style={styles.sidebarItem}
+                    onPress={() => {
+                      void handleStartProjectChat(project);
+                    }}
+                  >
                     <Text style={styles.sidebarItemTitle}>{project.name}</Text>
                     <Text style={styles.sidebarItemMeta}>Start project chat</Text>
                   </Pressable>
@@ -578,7 +778,7 @@ export default function HomeScreen() {
               <Text style={styles.chatTitle}>{selectedChat?.title ?? 'New chat'}</Text>
               <Text style={styles.chatSubtitle}>
                 {selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : 'No project attached'}
-                {selectedChat?.sessionId ? ' · resumable' : ''}
+                {selectedChat?.copilotSessionId ? ' · resumable' : ''}
               </Text>
             </View>
             <View style={styles.headerActions}>
@@ -609,6 +809,14 @@ export default function HomeScreen() {
             {(selectedChat?.messages ?? []).map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
+            {!selectedChat?.messages.length && !loading ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateTitle}>Start the thread</Text>
+                <Text style={styles.emptyStateBody}>
+                  Messages now persist on the backend, so you can come back later and resume the full conversation.
+                </Text>
+              </View>
+            ) : null}
           </ScrollView>
 
           <View style={styles.composerCard}>
@@ -616,10 +824,37 @@ export default function HomeScreen() {
               <View style={styles.draftAttachmentList}>
                 {selectedChat.draftAttachments.map((attachment) => (
                   <View key={attachment.id} style={styles.draftAttachmentChip}>
-                    <Text style={styles.draftAttachmentText}>{attachment.name}</Text>
-                    <Pressable onPress={() => handleRemoveAttachment(attachment.id)}>
-                      <Text style={styles.draftAttachmentRemove}>×</Text>
-                    </Pressable>
+                    <View style={styles.draftAttachmentMeta}>
+                      <Text style={styles.draftAttachmentText}>{attachment.name}</Text>
+                      <Text style={styles.draftAttachmentStatus}>
+                        {attachment.scope === 'knowledge'
+                          ? attachment.knowledgeStatus === 'pending'
+                            ? 'Project knowledge syncing...'
+                            : attachment.knowledgeStatus === 'indexed'
+                              ? 'Project knowledge indexed'
+                              : attachment.knowledgeStatus === 'failed'
+                                ? 'Knowledge sync failed'
+                                : 'Project knowledge'
+                          : 'Thread-only'}
+                      </Text>
+                    </View>
+                    <View style={styles.draftAttachmentActions}>
+                      {selectedChat.projectId && attachment.scope !== 'knowledge' ? (
+                        <Pressable
+                          onPress={() => {
+                            void handlePromoteAttachment(attachment.id);
+                          }}
+                          disabled={promotingAttachmentId === attachment.id}
+                        >
+                          <Text style={styles.draftAttachmentAction}>
+                            {promotingAttachmentId === attachment.id ? 'Promoting...' : 'Add to knowledge'}
+                          </Text>
+                        </Pressable>
+                      ) : null}
+                      <Pressable onPress={() => handleRemoveAttachment(attachment.id)}>
+                        <Text style={styles.draftAttachmentRemove}>×</Text>
+                      </Pressable>
+                    </View>
                   </View>
                 ))}
               </View>
@@ -658,7 +893,7 @@ export default function HomeScreen() {
                     <Text style={styles.modelPillChevron}>▾</Text>
                   </Pressable>
                 </View>
-                <Text style={styles.helperText}>Enter to send · Shift+Enter for newline · up to 5 files</Text>
+                <Text style={styles.helperText}>Files stay thread-local unless you promote them to project knowledge.</Text>
               </View>
               <Pressable
                 style={[
@@ -683,7 +918,21 @@ export default function HomeScreen() {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Settings</Text>
             <Text style={styles.modalBody}>Signed in as @{session.user.login}</Text>
+            <Text style={styles.modalBody}>
+              API: {activeApiUrl}
+              {health?.ragflowConfigured ? ' · RagFlow connected' : ' · RagFlow not configured'}
+            </Text>
+            <Text style={styles.modalBody}>Remote access: {remoteAccessLabel}</Text>
             <View style={styles.modalActions}>
+              <Pressable
+                style={styles.secondaryButton}
+                onPress={() => {
+                  setSettingsVisible(false);
+                  openConnectionSettings();
+                }}
+              >
+                <Text style={styles.secondaryButtonText}>Connection</Text>
+              </Pressable>
               <Pressable style={styles.secondaryButton} onPress={() => setSettingsVisible(false)}>
                 <Text style={styles.secondaryButtonText}>Close</Text>
               </Pressable>
@@ -695,6 +944,77 @@ export default function HomeScreen() {
                 }}
               >
                 <Text style={styles.primaryButtonText}>Sign out</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={connectionSettingsVisible}
+        onRequestClose={() => setConnectionSettingsVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.sheetCard}>
+            <Text style={styles.modalTitle}>Connection</Text>
+            <Text style={styles.modalBody}>
+              Point this frontend at your own daemon service. For GitHub Pages or any hosted frontend, use your daemon's
+              Tailscale HTTPS URL.
+            </Text>
+            <Text style={styles.modalLabel}>Daemon URL</Text>
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              placeholder="https://your-mac.tailnet.ts.net"
+              placeholderTextColor="#64748b"
+              value={apiUrlInput}
+              onChangeText={setApiUrlInput}
+              style={styles.modalInput}
+            />
+            <Text style={styles.helperText}>Default: {getDefaultApiUrl()}</Text>
+            <Text style={styles.helperText}>LAN example: http://192.168.x.y:4000</Text>
+            <Text style={styles.helperText}>Tailscale example: https://your-mac.tailnet.ts.net</Text>
+            {suggestedApiUrl ? <Text style={styles.helperText}>Suggested by daemon: {suggestedApiUrl}</Text> : null}
+            {savedApiUrlOverride ? <Text style={styles.helperText}>Saved override active</Text> : null}
+            <View style={styles.modalActions}>
+              {suggestedApiUrl ? (
+                <Pressable
+                  style={[styles.secondaryButton, savingConnection && styles.disabledButton]}
+                  onPress={() => setApiUrlInput(suggestedApiUrl)}
+                  disabled={savingConnection}
+                >
+                  <Text style={styles.secondaryButtonText}>Use suggested URL</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                style={[styles.secondaryButton, savingConnection && styles.disabledButton]}
+                onPress={() => {
+                  setConnectionSettingsVisible(false);
+                }}
+                disabled={savingConnection}
+              >
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.secondaryButton, savingConnection && styles.disabledButton]}
+                onPress={() => {
+                  void handleResetConnection();
+                }}
+                disabled={savingConnection}
+              >
+                <Text style={styles.secondaryButtonText}>Use default</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.primaryButton, savingConnection && styles.disabledButton]}
+                onPress={() => {
+                  void handleSaveConnection();
+                }}
+                disabled={savingConnection}
+              >
+                <Text style={styles.primaryButtonText}>{savingConnection ? 'Saving...' : 'Save'}</Text>
               </Pressable>
             </View>
           </View>
@@ -947,6 +1267,23 @@ const styles = StyleSheet.create({
     gap: 14,
     paddingBottom: 12,
   },
+  emptyState: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#1f2b46',
+    backgroundColor: '#0f172a',
+    padding: 18,
+    gap: 8,
+  },
+  emptyStateTitle: {
+    color: '#f8fafc',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  emptyStateBody: {
+    color: '#94a3b8',
+    lineHeight: 20,
+  },
   composerCard: {
     gap: 12,
     borderRadius: 22,
@@ -1002,26 +1339,43 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   draftAttachmentList: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: 'column',
     gap: 8,
   },
   draftAttachmentChip: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 8,
-    borderRadius: 999,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: '#334155',
     backgroundColor: '#111827',
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 10,
+  },
+  draftAttachmentMeta: {
+    flex: 1,
+    gap: 4,
   },
   draftAttachmentText: {
     color: '#e2e8f0',
     fontSize: 12,
     fontWeight: '600',
-    maxWidth: 220,
+  },
+  draftAttachmentStatus: {
+    color: '#94a3b8',
+    fontSize: 11,
+  },
+  draftAttachmentActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  draftAttachmentAction: {
+    color: '#93c5fd',
+    fontSize: 12,
+    fontWeight: '700',
   },
   draftAttachmentRemove: {
     color: '#94a3b8',
@@ -1178,6 +1532,23 @@ const styles = StyleSheet.create({
   },
   modalBody: {
     color: '#cbd5e1',
+    fontSize: 15,
+  },
+  modalLabel: {
+    color: '#e2e8f0',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  modalInput: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#263154',
+    backgroundColor: '#0f172a',
+    color: '#f8fafc',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     fontSize: 15,
   },
   sheetSubtitle: {

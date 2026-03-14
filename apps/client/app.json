@@ -8,21 +8,32 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.githubpersonalassistant.app",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.githubpersonalassistant.app"
     },
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "output": "static"
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "01b44d7e-294b-4e17-ac50-c4535b4b013c"
+      }
     }
   }
 }

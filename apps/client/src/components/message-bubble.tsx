@@ -28,6 +28,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
                           ? 'Document'
                           : 'File'}
                   {`: ${attachment.name}`}
+                  {attachment.scope === 'knowledge' ? ' · project knowledge' : ''}
                 </Text>
               </View>
             ))}

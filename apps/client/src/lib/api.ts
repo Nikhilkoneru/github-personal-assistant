@@ -1,25 +1,24 @@
-import Constants from 'expo-constants';
-
 import type {
   AttachmentSummary,
   ApiHealth,
   ChatStreamInput,
   ChatStreamEvent,
+  CreateThreadInput,
   GitHubDeviceAuthPoll,
   GitHubDeviceAuthStart,
   ModelOption,
   ProjectDetail,
   ProjectSummary,
+  ThreadDetail,
+  ThreadSummary,
   UserSession,
 } from '@github-personal-assistant/shared';
 
-const defaultApiUrl = Constants.expoConfig?.hostUri
-  ? `http://${Constants.expoConfig.hostUri.split(':')[0]}:4000`
-  : 'http://localhost:4000';
+import { resolveApiUrl } from './api-config';
 
-export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? defaultApiUrl;
+const SERVICE_ACCESS_TOKEN = process.env.EXPO_PUBLIC_SERVICE_ACCESS_TOKEN;
 
-const buildUrl = (path: string) => `${API_URL}${path}`;
+const buildUrl = async (path: string) => `${await resolveApiUrl()}${path}`;
 
 const parseErrorMessage = (raw: string, status: number) => {
   if (!raw) {
@@ -60,17 +59,22 @@ const notifyUnauthorized = () => {
   void unauthorizedHandler?.();
 };
 
+const buildHeaders = (sessionToken?: string, extraHeaders?: HeadersInit) => ({
+  ...(SERVICE_ACCESS_TOKEN ? { 'X-Service-Access-Token': SERVICE_ACCESS_TOKEN } : {}),
+  ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+  ...(extraHeaders ?? {}),
+});
+
 export const fetchJson = async <T>(path: string, options?: RequestInit, sessionToken?: string): Promise<T> => {
   let response: Response;
 
   try {
-    response = await fetch(buildUrl(path), {
+    response = await fetch(await buildUrl(path), {
       ...options,
-      headers: {
+      headers: buildHeaders(sessionToken, {
         'Content-Type': 'application/json',
-        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         ...(options?.headers ?? {}),
-      },
+      }),
     });
   } catch (error) {
     throw new Error(parseNetworkError(error));
@@ -109,19 +113,28 @@ export const createProject = (payload: { name: string; description?: string }, s
     sessionToken,
   );
 
+export const getThreads = (sessionToken?: string, projectId?: string) =>
+  fetchJson<{ threads: ThreadSummary[] }>(
+    projectId ? `/api/threads?projectId=${encodeURIComponent(projectId)}` : '/api/threads',
+    undefined,
+    sessionToken,
+  );
+
+export const getThread = (threadId: string, sessionToken?: string) =>
+  fetchJson<{ thread: ThreadDetail }>(`/api/threads/${threadId}`, undefined, sessionToken);
+
+export const createThread = (payload: CreateThreadInput, sessionToken?: string) =>
+  fetchJson<{ thread: ThreadSummary }>(
+    '/api/threads',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    sessionToken,
+  );
+
 export const getModels = (sessionToken?: string) =>
   fetchJson<{ models: ModelOption[] }>('/api/models', undefined, sessionToken);
-
-export const getGitHubAuthUrl = (redirectUri: string) =>
-  fetchJson<{ authorizeUrl: string }>(`/api/auth/github/url?redirectUri=${encodeURIComponent(redirectUri)}`);
-
-export const startGitHubDeviceAuth = () =>
-  fetchJson<GitHubDeviceAuthStart>('/api/auth/github/device/start', {
-    method: 'POST',
-  });
-
-export const pollGitHubDeviceAuth = (flowId: string) =>
-  fetchJson<GitHubDeviceAuthPoll>(`/api/auth/github/device/${encodeURIComponent(flowId)}`);
 
 export const getSession = (sessionToken: string) =>
   fetchJson<{ session: UserSession | null }>('/api/auth/session', undefined, sessionToken);
@@ -135,6 +148,14 @@ export const logout = (sessionToken: string) =>
     sessionToken,
   );
 
+export const startGitHubDeviceAuth = () =>
+  fetchJson<GitHubDeviceAuthStart>('/api/auth/github/device/start', {
+    method: 'POST',
+  });
+
+export const pollGitHubDeviceAuth = (flowId: string) =>
+  fetchJson<GitHubDeviceAuthPoll>(`/api/auth/github/device/${encodeURIComponent(flowId)}`);
+
 type UploadableAttachment = {
   uri: string;
   name: string;
@@ -142,7 +163,11 @@ type UploadableAttachment = {
   file?: File;
 };
 
-export const uploadAttachment = async (attachment: UploadableAttachment, sessionToken: string) => {
+export const uploadAttachment = async (
+  attachment: UploadableAttachment,
+  sessionToken: string,
+  options?: { threadId?: string; projectId?: string },
+) => {
   const body = new FormData();
 
   if (attachment.file) {
@@ -155,14 +180,20 @@ export const uploadAttachment = async (attachment: UploadableAttachment, session
     } as unknown as Blob);
   }
 
+  if (options?.threadId) {
+    body.append('threadId', options.threadId);
+  }
+
+  if (options?.projectId) {
+    body.append('projectId', options.projectId);
+  }
+
   let response: Response;
 
   try {
-    response = await fetch(buildUrl('/api/attachments'), {
+    response = await fetch(await buildUrl('/api/attachments'), {
       method: 'POST',
-      headers: {
-        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-      },
+      headers: buildHeaders(sessionToken),
       body,
     });
   } catch (error) {
@@ -180,6 +211,16 @@ export const uploadAttachment = async (attachment: UploadableAttachment, session
   return response.json() as Promise<{ attachment: AttachmentSummary }>;
 };
 
+export const promoteAttachmentToKnowledge = (attachmentId: string, payload: { projectId: string }, sessionToken: string) =>
+  fetchJson<{ attachment: AttachmentSummary }>(
+    `/api/attachments/${attachmentId}/promote`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    sessionToken,
+  );
+
 export async function streamChat(
   input: ChatStreamInput,
   sessionToken: string | undefined,
@@ -188,12 +229,11 @@ export async function streamChat(
   let response: Response;
 
   try {
-    response = await fetch(buildUrl('/api/chat/stream'), {
+    response = await fetch(await buildUrl('/api/chat/stream'), {
       method: 'POST',
-      headers: {
+      headers: buildHeaders(sessionToken, {
         'Content-Type': 'application/json',
-        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-      },
+      }),
       body: JSON.stringify(input),
     });
   } catch (error) {

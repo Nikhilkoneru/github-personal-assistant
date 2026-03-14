@@ -1,13 +1,14 @@
-import express from 'express';
 import cors from 'cors';
+import express from 'express';
 
+import { env } from './config';
 import attachmentRoutes from './routes/attachments';
 import authRoutes from './routes/auth';
 import chatRoutes from './routes/chat';
 import healthRoutes from './routes/health';
 import modelRoutes from './routes/models';
 import projectRoutes from './routes/projects';
-import { env } from './config';
+import threadRoutes from './routes/threads';
 
 const app = express();
 
@@ -23,8 +24,12 @@ app.use(authRoutes);
 app.use(attachmentRoutes);
 app.use(modelRoutes);
 app.use(projectRoutes);
+app.use(threadRoutes);
 app.use(chatRoutes);
 
-app.listen(env.port, () => {
-  console.log(`Github Personal Assistant API listening on http://localhost:${env.port}`);
+app.listen(env.port, env.host, () => {
+  console.log(`Github Personal Assistant API listening on http://${env.host}:${env.port}`);
+  if (env.publicApiUrl) {
+    console.log(`Advertised public API URL: ${env.publicApiUrl}`);
+  }
 });

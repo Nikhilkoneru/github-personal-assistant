@@ -29,6 +29,10 @@ type AttachmentRow = {
   uploaded_at: string;
 };
 
+export type ThreadAttachmentReference = AttachmentSummary & {
+  filePath: string;
+};
+
 const sanitizeName = (value: string) =>
   value
     .replace(/[^a-zA-Z0-9._-]+/g, '-')
@@ -128,10 +132,9 @@ export const saveAttachment = async ({
 
     db.prepare(`
       INSERT INTO attachments (
-        id, github_user_id, thread_id, project_id, name, mime_type, size, kind, scope,
-        knowledge_status, file_path, pdf_context_file_path, pdf_extraction, pdf_page_count, pdf_title,
+        id, github_user_id, thread_id, name, mime_type, size, kind, file_path, pdf_context_file_path, pdf_extraction, pdf_page_count, pdf_title,
         created_at, updated_at, uploaded_at
-      ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'thread', 'none', ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       attachmentId,
       ownerId,
@@ -171,6 +174,16 @@ export const getAttachmentSummary = (ownerId: string, attachmentId: string) => {
   const row = getAttachmentRecord(ownerId, attachmentId);
   return row ? toSummary(row) : null;
 };
+
+export const listThreadAttachmentReferences = (ownerId: string, threadId: string): ThreadAttachmentReference[] =>
+  (
+    db
+      .prepare('SELECT * FROM attachments WHERE github_user_id = ? AND thread_id = ? ORDER BY uploaded_at ASC')
+      .all(ownerId, threadId) as AttachmentRow[]
+  ).map((row) => ({
+    ...toSummary(row),
+    filePath: row.file_path,
+  }));
 
 export const getAttachmentInputs = async (ownerId: string, attachmentIds: string[]) => {
   const attachments = getAttachmentRows(ownerId, attachmentIds);

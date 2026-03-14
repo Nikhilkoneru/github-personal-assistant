@@ -1,31 +1,23 @@
 import { Router, type Response } from 'express';
 import { z } from 'zod';
 
-import type { ChatRole, ChatStreamEvent } from '@github-personal-assistant/shared';
+import type { ChatStreamEvent, ChatToolActivity, ChatUserInputRequest, ReasoningEffort } from '@github-personal-assistant/shared';
 
-import { env } from '../config';
 import { requireRequestSession } from '../lib/auth';
 import { getOrCreateSession } from '../services/copilot';
 import { buildAttachmentPromptContext, getAttachmentInputs } from '../store/attachment-store';
 import { getCopilotPreferences } from '../store/copilot-preferences-store';
-import {
-  createMessage,
-  getThread,
-  getThreadDetail,
-  linkMessageAttachments,
-  renameThreadIfPlaceholder,
-  updateMessage,
-  updateThreadModel,
-  updateThreadSession,
-} from '../store/thread-store';
+import { getThread, renameThreadIfPlaceholder, updateThread, updateThreadPreview, updateThreadSession } from '../store/thread-store';
 
 const router = Router();
 const SEND_AND_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
+const reasoningEfforts = ['low', 'medium', 'high', 'xhigh'] satisfies [ReasoningEffort, ...ReasoningEffort[]];
 
 const chatSchema = z.object({
   threadId: z.string().trim().min(1),
   prompt: z.string().trim().min(1).max(8000),
   model: z.string().trim().optional(),
+  reasoningEffort: z.enum(reasoningEfforts).optional(),
   attachments: z.array(z.string().trim().min(1)).max(5).optional(),
 });
 
@@ -33,19 +25,32 @@ const abortSchema = z.object({
   threadId: z.string().trim().min(1),
 });
 
+const userInputSchema = z.object({
+  threadId: z.string().trim().min(1),
+  requestId: z.string().trim().min(1),
+  answer: z.string().max(4000),
+});
+
 type SessionLike = {
   on: (eventName: string, listener: (event: unknown) => void) => () => void;
   sendAndWait: (input: {
     prompt: string;
     attachments?: Array<{ type: 'file'; path: string; displayName?: string }>;
-  }, timeout?: number) => Promise<unknown>;
+  }, timeout?: number) => Promise<{ data?: { content?: string } } | undefined>;
   abort: () => Promise<void>;
   disconnect: () => Promise<void>;
 };
 
+type PendingUserInput = {
+  request: ChatUserInputRequest;
+  resolve: (value: { answer: string; wasFreeform: boolean }) => void;
+  reject: (error?: unknown) => void;
+};
+
 type ActiveSessionEntry = {
-  session: SessionLike;
+  session: SessionLike | null;
   aborted: boolean;
+  pendingUserInputs: Map<string, PendingUserInput>;
 };
 
 const activeSessions = new Map<string, ActiveSessionEntry>();
@@ -68,11 +73,28 @@ const summarizeTitle = (prompt: string) => {
   return singleLine.length > 42 ? `${singleLine.slice(0, 42)}...` : singleLine;
 };
 
-const historyToPrompt = (messages: Array<{ role: ChatRole; content: string }>) =>
-  messages
-    .filter((message) => message.role === 'user' || message.role === 'assistant' || message.role === 'system')
-    .map((message) => `${message.role}: ${message.content}`)
-    .join('\n');
+const asRecord = (value: unknown) => (typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null);
+const asString = (value: unknown) => (typeof value === 'string' ? value : undefined);
+
+const serializeUnknown = (value: unknown) => {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
+const writeToolActivity = (response: Response, activity: ChatToolActivity) => {
+  writeEvent(response, { type: 'tool_event', activity });
+};
 
 router.post('/api/chat/abort', async (request, response) => {
   const parsed = abortSchema.safeParse(request.body);
@@ -101,8 +123,46 @@ router.post('/api/chat/abort', async (request, response) => {
   }
 
   entry.aborted = true;
-  await entry.session.abort().catch(() => undefined);
+  for (const pending of entry.pendingUserInputs.values()) {
+    pending.reject(new Error('Response stopped.'));
+  }
+  entry.pendingUserInputs.clear();
+  await entry.session?.abort().catch(() => undefined);
   response.json({ aborted: true });
+});
+
+router.post('/api/chat/user-input', (request, response) => {
+  const parsed = userInputSchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+
+  const userSession = requireRequestSession(request, response);
+  if (!userSession) {
+    return;
+  }
+
+  const ownerId = String(userSession.user.id);
+  const thread = getThread(ownerId, parsed.data.threadId);
+  if (!thread) {
+    response.status(404).json({ error: 'Thread not found.' });
+    return;
+  }
+
+  const entry = activeSessions.get(thread.id);
+  const pending = entry?.pendingUserInputs.get(parsed.data.requestId);
+  if (!entry || !pending) {
+    response.status(404).json({ error: 'Input request not found.' });
+    return;
+  }
+
+  entry.pendingUserInputs.delete(parsed.data.requestId);
+  pending.resolve({
+    answer: parsed.data.answer,
+    wasFreeform: !pending.request.choices?.includes(parsed.data.answer),
+  });
+  response.json({ accepted: true });
 });
 
 router.post('/api/chat/stream', async (request, response) => {
@@ -125,6 +185,9 @@ router.post('/api/chat/stream', async (request, response) => {
   }
 
   const sessionId = thread.copilotSessionId ?? `thread-${thread.id}`;
+  const approvalMode = getCopilotPreferences().approvalMode;
+  const model = parsed.data.model ?? thread.model;
+  const reasoningEffort = parsed.data.reasoningEffort ?? thread.reasoningEffort;
 
   response.setHeader('Content-Type', 'text/event-stream');
   response.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -136,16 +199,16 @@ router.post('/api/chat/stream', async (request, response) => {
   writeEvent(response, { type: 'session', sessionId });
 
   let session: SessionLike | null = null;
-  let unsubscribeDelta: (() => void) | null = null;
-  let unsubscribeMessage: (() => void) | null = null;
+  const activeEntry: ActiveSessionEntry = {
+    session: null,
+    aborted: false,
+    pendingUserInputs: new Map(),
+  };
+  const unsubscribers: Array<() => void> = [];
   let streamedContent = '';
-  let assistantMessageId: string | null = null;
 
   try {
-    const historicalThread = getThreadDetail(ownerId, thread.id);
-    const priorMessages = historicalThread ? historicalThread.messages : [];
-    const attachmentInputs = parsed.data.attachments && parsed.data.attachments.length > 0 ? await getAttachmentInputs(ownerId, parsed.data.attachments) : [];
-
+    const attachmentInputs = parsed.data.attachments?.length ? await getAttachmentInputs(ownerId, parsed.data.attachments) : [];
     if (parsed.data.attachments && !attachmentInputs) {
       writeEvent(response, { type: 'error', message: 'One or more attachments could not be found.' });
       response.end();
@@ -159,7 +222,6 @@ router.post('/api/chat/stream', async (request, response) => {
           query: parsed.data.prompt,
         })
       : '';
-
     if (parsed.data.attachments && attachmentPromptContext === null) {
       writeEvent(response, { type: 'error', message: 'One or more attachments could not be found.' });
       response.end();
@@ -175,20 +237,10 @@ router.post('/api/chat/stream', async (request, response) => {
       .filter((section): section is string => Boolean(section))
       .join('\n\n');
 
-    const promptWithHistory = [historyToPrompt(priorMessages), `user: ${enrichedPrompt}`].filter(Boolean).join('\n');
-
-    const userMessageId = createMessage(thread.id, 'user', parsed.data.prompt);
-    if (parsed.data.attachments?.length) {
-      linkMessageAttachments(userMessageId, parsed.data.attachments);
-    }
-
-    assistantMessageId = createMessage(thread.id, 'assistant', '');
-
     renameThreadIfPlaceholder(thread.id, summarizeTitle(parsed.data.prompt));
-
-    const model = parsed.data.model ?? thread.model ?? env.defaultModel;
-    updateThreadModel(thread.id, model);
+    updateThread(ownerId, thread.id, { model, reasoningEffort: reasoningEffort ?? null });
     updateThreadSession(thread.id, sessionId);
+    updateThreadPreview(thread.id, parsed.data.prompt);
 
     session = (await getOrCreateSession({
       sessionId,
@@ -196,76 +248,219 @@ router.post('/api/chat/stream', async (request, response) => {
       ownerId,
       threadId: thread.id,
       model,
-      approvalMode: getCopilotPreferences().approvalMode,
-    })) as unknown as SessionLike;
-    activeSessions.set(thread.id, { session, aborted: false });
+      reasoningEffort,
+      approvalMode,
+      onUserInputRequest: async (userInputRequest) => {
+        writeEvent(response, { type: 'user_input_request', request: userInputRequest });
+        return await new Promise<{ answer: string; wasFreeform: boolean }>((resolve, reject) => {
+          activeEntry.pendingUserInputs.set(userInputRequest.requestId, {
+            request: userInputRequest,
+            resolve: (value) => {
+              writeEvent(response, { type: 'user_input_cleared', requestId: userInputRequest.requestId });
+              resolve(value);
+            },
+            reject,
+          });
+        });
+      },
+    })) as SessionLike | null;
+
+    if (!session) {
+      writeEvent(response, { type: 'error', message: 'Unable to restore the Copilot session.' });
+      response.end();
+      return;
+    }
+
+    activeEntry.session = session;
+    activeSessions.set(thread.id, activeEntry);
+
     if (pendingAborts.has(thread.id)) {
       pendingAborts.delete(thread.id);
-      if (assistantMessageId) {
-        updateMessage(assistantMessageId, { content: 'Response stopped.', role: 'error' });
-      }
+      activeEntry.aborted = true;
       writeEvent(response, { type: 'aborted', message: 'Response stopped.' });
       return;
     }
 
-    unsubscribeDelta = session.on('assistant.message_delta', (event: unknown) => {
-      const delta =
-        typeof event === 'object' && event && 'data' in event && typeof (event as { data?: { deltaContent?: string } }).data?.deltaContent === 'string'
-          ? (event as { data?: { deltaContent?: string } }).data!.deltaContent!
-          : '';
+    unsubscribers.push(
+      session.on('assistant.message_delta', (event: unknown) => {
+        const delta = asString(asRecord(asRecord(event)?.data)?.deltaContent) ?? '';
+        if (!delta) {
+          return;
+        }
 
-      if (!delta) {
-        return;
-      }
+        streamedContent += delta;
+        writeEvent(response, { type: 'chunk', delta });
+      }),
+    );
 
-      streamedContent += delta;
-      if (!assistantMessageId) {
-        return;
-      }
-      updateMessage(assistantMessageId, { content: streamedContent });
-      writeEvent(response, { type: 'chunk', delta });
-    });
+    unsubscribers.push(
+      session.on('assistant.message', (event: unknown) => {
+        const content = asString(asRecord(asRecord(event)?.data)?.content) ?? '';
+        if (!content) {
+          return;
+        }
 
-    unsubscribeMessage = session.on('assistant.message', (event: unknown) => {
-      const content =
-        typeof event === 'object' && event && 'data' in event && typeof (event as { data?: { content?: string } }).data?.content === 'string'
-          ? (event as { data?: { content?: string } }).data!.content!
-          : '';
+        streamedContent = content;
+        updateThreadPreview(thread.id, content);
+      }),
+    );
 
-      if (!content) {
-        return;
-      }
+    unsubscribers.push(
+      session.on('assistant.reasoning_delta', (event: unknown) => {
+        const delta = asString(asRecord(asRecord(event)?.data)?.deltaContent) ?? '';
+        if (delta) {
+          writeEvent(response, { type: 'reasoning_delta', delta });
+        }
+      }),
+    );
 
-      streamedContent = content;
-      if (!assistantMessageId) {
-        return;
-      }
-      updateMessage(assistantMessageId, { content });
-    });
+    unsubscribers.push(
+      session.on('assistant.reasoning', (event: unknown) => {
+        const content = asString(asRecord(asRecord(event)?.data)?.content) ?? '';
+        if (content) {
+          writeEvent(response, { type: 'reasoning', content });
+        }
+      }),
+    );
 
-    await session.sendAndWait({ prompt: promptWithHistory, attachments: attachmentInputs ?? [] }, SEND_AND_WAIT_TIMEOUT_MS);
-    if (activeSessions.get(thread.id)?.aborted) {
+    unsubscribers.push(
+      session.on('assistant.usage', (event: unknown) => {
+        const data = asRecord(asRecord(event)?.data);
+        if (!data) {
+          return;
+        }
+
+        const modelName = asString(data.model);
+        if (!modelName) {
+          return;
+        }
+
+        writeEvent(response, {
+          type: 'usage',
+          usage: {
+            model: modelName,
+            inputTokens: typeof data.inputTokens === 'number' ? data.inputTokens : undefined,
+            outputTokens: typeof data.outputTokens === 'number' ? data.outputTokens : undefined,
+            cacheReadTokens: typeof data.cacheReadTokens === 'number' ? data.cacheReadTokens : undefined,
+            cacheWriteTokens: typeof data.cacheWriteTokens === 'number' ? data.cacheWriteTokens : undefined,
+            cost: typeof data.cost === 'number' ? data.cost : undefined,
+            duration: typeof data.duration === 'number' ? data.duration : undefined,
+            initiator: asString(data.initiator),
+          },
+        });
+      }),
+    );
+
+    unsubscribers.push(
+      session.on('tool.execution_start', (event: unknown) => {
+        const data = asRecord(asRecord(event)?.data);
+        const toolCallId = asString(data?.toolCallId);
+        const toolName = asString(data?.toolName);
+        if (!toolCallId || !toolName) {
+          return;
+        }
+
+        writeToolActivity(response, {
+          id: toolCallId,
+          toolName,
+          status: 'running',
+          startedAt: asString(asRecord(event)?.timestamp) ?? new Date().toISOString(),
+          updatedAt: asString(asRecord(event)?.timestamp) ?? new Date().toISOString(),
+          arguments: serializeUnknown(data?.arguments),
+        });
+      }),
+    );
+
+    unsubscribers.push(
+      session.on('tool.execution_progress', (event: unknown) => {
+        const data = asRecord(asRecord(event)?.data);
+        const toolCallId = asString(data?.toolCallId);
+        if (!toolCallId) {
+          return;
+        }
+
+        writeToolActivity(response, {
+          id: toolCallId,
+          toolName: 'Tool',
+          status: 'running',
+          startedAt: asString(asRecord(event)?.timestamp) ?? new Date().toISOString(),
+          updatedAt: asString(asRecord(event)?.timestamp) ?? new Date().toISOString(),
+          additionalContext: asString(data?.progressMessage),
+        });
+      }),
+    );
+
+    unsubscribers.push(
+      session.on('tool.execution_partial_result', (event: unknown) => {
+        const data = asRecord(asRecord(event)?.data);
+        const toolCallId = asString(data?.toolCallId);
+        if (!toolCallId) {
+          return;
+        }
+
+        writeToolActivity(response, {
+          id: toolCallId,
+          toolName: 'Tool',
+          status: 'running',
+          startedAt: asString(asRecord(event)?.timestamp) ?? new Date().toISOString(),
+          updatedAt: asString(asRecord(event)?.timestamp) ?? new Date().toISOString(),
+          result: asString(data?.partialOutput),
+        });
+      }),
+    );
+
+    unsubscribers.push(
+      session.on('tool.execution_complete', (event: unknown) => {
+        const data = asRecord(asRecord(event)?.data);
+        const toolCallId = asString(data?.toolCallId);
+        if (!toolCallId) {
+          return;
+        }
+
+        const result = asRecord(data?.result);
+        const error = asRecord(data?.error);
+        writeToolActivity(response, {
+          id: toolCallId,
+          toolName: 'Tool',
+          status: data?.success === true ? 'completed' : 'failed',
+          startedAt: asString(asRecord(event)?.timestamp) ?? new Date().toISOString(),
+          updatedAt: asString(asRecord(event)?.timestamp) ?? new Date().toISOString(),
+          result: asString(result?.detailedContent) ?? asString(result?.content),
+          error: asString(error?.message),
+        });
+      }),
+    );
+
+    await session.sendAndWait({ prompt: enrichedPrompt, attachments: attachmentInputs ?? [] }, SEND_AND_WAIT_TIMEOUT_MS);
+
+    if (activeEntry.aborted) {
       writeEvent(response, { type: 'aborted', message: 'Response stopped.' });
       return;
+    }
+
+    if (!streamedContent.trim()) {
+      updateThreadPreview(thread.id, parsed.data.prompt);
     }
     writeEvent(response, { type: 'done' });
   } catch (error) {
-    const wasAborted = activeSessions.get(thread.id)?.aborted ?? false;
+    const wasAborted = activeEntry.aborted;
     if (wasAborted) {
       writeEvent(response, { type: 'aborted', message: 'Response stopped.' });
       return;
     }
 
     const message = error instanceof Error ? error.message : 'Unknown streaming error.';
-    if (assistantMessageId) {
-      updateMessage(assistantMessageId, { content: message, role: 'error' });
-    }
     writeEvent(response, { type: 'error', message });
   } finally {
+    for (const pending of activeEntry.pendingUserInputs.values()) {
+      pending.reject(new Error('Session closed.'));
+    }
+    activeEntry.pendingUserInputs.clear();
     activeSessions.delete(thread.id);
     pendingAborts.delete(thread.id);
-    unsubscribeDelta?.();
-    unsubscribeMessage?.();
+    for (const unsubscribe of unsubscribers) {
+      unsubscribe();
+    }
     await session?.disconnect().catch(() => undefined);
     response.end();
   }

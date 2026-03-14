@@ -10,6 +10,7 @@ import type {
   GitHubDeviceAuthStart,
   ModelOption,
   ProjectSummary,
+  ReasoningEffort,
   ThreadDetail,
   ThreadSummary,
   UserSession,
@@ -143,7 +144,11 @@ export const createThread = (payload: CreateThreadInput, sessionToken?: string) 
     },
     sessionToken,
   );
-export const updateThread = (threadId: string, payload: { projectId?: string | null }, sessionToken?: string) =>
+export const updateThread = (
+  threadId: string,
+  payload: { projectId?: string | null; model?: string; reasoningEffort?: ReasoningEffort | null },
+  sessionToken?: string,
+) =>
   fetchJson<{ thread: ThreadSummary }>(
     `/api/threads/${threadId}`,
     {
@@ -225,6 +230,16 @@ export const uploadAttachment = async (
 export const abortChat = (payload: { threadId: string }, sessionToken: string) =>
   fetchJson<{ aborted: boolean }>(
     '/api/chat/abort',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    sessionToken,
+  );
+
+export const respondToUserInput = (payload: { threadId: string; requestId: string; answer: string }, sessionToken: string) =>
+  fetchJson<{ accepted: boolean }>(
+    '/api/chat/user-input',
     {
       method: 'POST',
       body: JSON.stringify(payload),

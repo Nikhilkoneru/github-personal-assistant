@@ -2,7 +2,6 @@ import crypto from 'node:crypto';
 
 import type { ProjectDetail, ProjectSummary } from '@github-personal-assistant/shared';
 
-import { env } from '../config';
 import { db, nowIso } from '../db';
 
 type ProjectRow = {
@@ -73,14 +72,13 @@ export const createProject = (ownerId: string, input: { name: string; descriptio
 
   db.prepare(`
     INSERT INTO projects (
-      id, github_user_id, name, description, default_model, instructions, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, '', ?, ?)
+      id, github_user_id, name, description, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
   `).run(
     project.id,
     ownerId,
     project.name,
     project.description,
-    env.defaultModel,
     project.updatedAt,
     project.updatedAt,
   );

@@ -383,6 +383,50 @@ button { cursor: pointer; }
 .message-row.error .message-bubble { background: rgba(80, 18, 18, 0.82); border-color: rgba(239, 68, 68, 0.34); }
 .message-body { white-space: pre-wrap; line-height: 1.55; overflow-wrap: anywhere; }
 .message-meta { font-size: 0.76rem; color: rgba(226, 232, 240, 0.72); }
+.message-detail {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 16px;
+  background: rgba(9, 14, 28, 0.34);
+  padding: 10px 12px;
+}
+.message-detail summary {
+  cursor: pointer;
+  color: #bfdbfe;
+  font-weight: 700;
+}
+.message-detail-body,
+.tool-activity-copy {
+  margin-top: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.tool-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.tool-activity-item {
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  padding-top: 10px;
+}
+.tool-activity-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.tool-activity-title {
+  font-weight: 700;
+  color: var(--text);
+}
+.tool-activity-copy.error {
+  color: #fecaca;
+}
+.message-usage {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
 .attachment-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .attachment-chip {
   padding: 6px 10px;
@@ -475,6 +519,24 @@ button { cursor: pointer; }
   border: 1px solid var(--border);
   background: rgba(9, 14, 28, 0.78);
   min-width: 0;
+  flex-wrap: wrap;
+}
+.user-input-card {
+  border-radius: 18px;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  background: rgba(15, 23, 42, 0.55);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.user-input-question {
+  font-weight: 700;
+  line-height: 1.5;
+}
+.user-input-choices {
+  display: flex;
+  gap: 10px;
   flex-wrap: wrap;
 }
 .attachment-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

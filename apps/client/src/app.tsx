@@ -4,9 +4,11 @@ import type {
   AttachmentSummary,
   ApiHealth,
   ChatMessage,
+  ChatToolActivity,
   CopilotPreferences,
   ModelOption,
   ProjectSummary,
+  ReasoningEffort,
   ThreadDetail,
   ThreadSummary,
 } from '@github-personal-assistant/shared';
@@ -19,6 +21,7 @@ import {
   getCopilotPreferences,
   getHealth,
   getModels,
+  respondToUserInput,
   getProjects,
   getThread,
   getThreads,
@@ -78,18 +81,28 @@ const createMessage = (role: ChatMessage['role'], content: string, attachments?:
   createdAt: new Date().toISOString(),
   ...(attachments && attachments.length > 0 ? { attachments } : {}),
 });
+const upsertToolActivity = (activities: ChatToolActivity[] | undefined, nextActivity: ChatToolActivity) => {
+  const current = activities ?? [];
+  const existingIndex = current.findIndex((activity) => activity.id === nextActivity.id);
+  if (existingIndex >= 0) {
+    return current.map((activity, index) => (index === existingIndex ? { ...activity, ...nextActivity } : activity));
+  }
+  return [...current, nextActivity];
+};
 const toLocalChatSummary = (thread: ThreadSummary): LocalChat => ({ ...thread, messages: [], draftAttachments: [], hasLoadedMessages: false });
 const mergeThreadIntoLocal = (thread: ThreadSummary, existing?: LocalChat): LocalChat => ({
   ...thread,
   messages: existing?.messages ?? [],
   draftAttachments: existing?.draftAttachments ?? [],
   hasLoadedMessages: existing?.hasLoadedMessages ?? false,
+  pendingUserInputRequest: existing?.pendingUserInputRequest,
 });
 const mergeThreadDetailIntoLocal = (thread: ThreadDetail, existing?: LocalChat): LocalChat => ({
   ...thread,
   messages: sortMessages(thread.messages),
   draftAttachments: existing?.draftAttachments ?? [],
   hasLoadedMessages: true,
+  pendingUserInputRequest: thread.pendingUserInputRequest,
 });
 const summarizeTitle = (prompt: string) => (prompt.length > 42 ? `${prompt.slice(0, 42)}...` : prompt);
 
@@ -208,9 +221,12 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
   const [copilotPreferences, setCopilotPreferences] = useState<CopilotPreferences>({ approvalMode: 'approve-all' });
   const [savingApprovalMode, setSavingApprovalMode] = useState(false);
+  const [savingThreadConfigId, setSavingThreadConfigId] = useState<string | null>(null);
   const [draggedChatId, setDraggedChatId] = useState<string | null>(null);
   const [dragOverGroupId, setDragOverGroupId] = useState<string | 'inbox' | 'new-project' | null>(null);
   const [movingChatId, setMovingChatId] = useState<string | null>(null);
+  const [respondingToUserInputId, setRespondingToUserInputId] = useState<string | null>(null);
+  const [userInputDrafts, setUserInputDrafts] = useState<Record<string, string>>({});
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -451,6 +467,10 @@ export default function App() {
     [orderedChats, projects],
   );
   const activeModelId = selectedChat?.model ?? defaultModel;
+  const selectedModel = useMemo(() => models.find((model) => model.id === activeModelId) ?? null, [activeModelId, models]);
+  const selectedReasoningEfforts = selectedModel?.supportedReasoningEfforts ?? [];
+  const activeReasoningEffort =
+    selectedChat?.reasoningEffort ?? selectedModel?.defaultReasoningEffort ?? selectedReasoningEfforts[0] ?? null;
   const headerMeta = selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : '';
 
   useEffect(() => {
@@ -534,6 +554,56 @@ export default function App() {
       }
     },
     [session],
+  );
+
+  const handleThreadConfigChange = useCallback(
+    async (threadId: string, payload: { model?: string; reasoningEffort?: ReasoningEffort | null }) => {
+      if (!session) {
+        return;
+      }
+
+      setSavingThreadConfigId(threadId);
+      setError(null);
+      try {
+        const response = await updateThread(threadId, payload, session.sessionToken);
+        upsertThreadSummary(response.thread);
+        if (selectedChatId === threadId) {
+          await loadThreadDetail(threadId);
+        }
+      } catch (threadConfigError) {
+        setError(threadConfigError instanceof Error ? threadConfigError.message : 'Unable to update chat settings.');
+      } finally {
+        setSavingThreadConfigId((current) => (current === threadId ? null : current));
+      }
+    },
+    [loadThreadDetail, selectedChatId, session, upsertThreadSummary],
+  );
+
+  const handleRespondToPendingInput = useCallback(
+    async (requestId: string, answer: string) => {
+      if (!session || !selectedChat) {
+        return;
+      }
+
+      setRespondingToUserInputId(requestId);
+      setError(null);
+      try {
+        await respondToUserInput({ threadId: selectedChat.id, requestId, answer }, session.sessionToken);
+        setUserInputDrafts((current) => {
+          const next = { ...current };
+          delete next[requestId];
+          return next;
+        });
+        updateChat(selectedChat.id, (chat) =>
+          chat.pendingUserInputRequest?.requestId === requestId ? { ...chat, pendingUserInputRequest: undefined } : chat,
+        );
+      } catch (userInputError) {
+        setError(userInputError instanceof Error ? userInputError.message : 'Unable to send your answer.');
+      } finally {
+        setRespondingToUserInputId((current) => (current === requestId ? null : current));
+      }
+    },
+    [selectedChat, session, updateChat],
   );
 
   const handleCreateChat = useCallback(async (projectId?: string | null) => {
@@ -736,22 +806,38 @@ export default function App() {
     const assistantMessageId = createId();
     const chatId = selectedChat.id;
     const model = selectedChat.model || defaultModel;
+    const reasoningEffort = selectedChat.reasoningEffort;
     const messageAttachments = selectedChat.draftAttachments;
     let pendingDelta = '';
+    let pendingReasoningDelta = '';
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
     const flushPendingDelta = () => {
-      if (!pendingDelta) {
+      if (!pendingDelta && !pendingReasoningDelta) {
         return;
       }
       const nextDelta = pendingDelta;
+      const nextReasoningDelta = pendingReasoningDelta;
       pendingDelta = '';
+      pendingReasoningDelta = '';
       updateChat(chatId, (chat) => ({
         ...chat,
         updatedAt: new Date().toISOString(),
         messages: sortMessages(
           chat.messages.map((message) =>
-            message.id === assistantMessageId ? { ...message, content: `${message.content}${nextDelta}` } : message,
+            message.id === assistantMessageId
+              ? {
+                  ...message,
+                  content: `${message.content}${nextDelta}`,
+                  metadata: nextReasoningDelta
+                    ? {
+                        ...(message.metadata ?? {}),
+                        reasoning: `${message.metadata?.reasoning ?? ''}${nextReasoningDelta}`,
+                        reasoningState: 'streaming',
+                      }
+                    : message.metadata,
+                }
+              : message,
           ),
         ),
       }));
@@ -774,19 +860,27 @@ export default function App() {
       ...chat,
       title: chat.title === 'New chat' ? summarizeTitle(prompt) : chat.title,
       model,
+      reasoningEffort,
       updatedAt: new Date().toISOString(),
       draftAttachments: [],
+      pendingUserInputRequest: undefined,
       messages: sortMessages([
         ...chat.messages,
         createMessage('user', prompt, messageAttachments),
-        { id: assistantMessageId, role: 'assistant', content: '', createdAt: new Date().toISOString() },
+        { id: assistantMessageId, role: 'assistant', content: '', createdAt: new Date().toISOString(), metadata: {} },
       ]),
       hasLoadedMessages: true,
     }));
 
     try {
       await streamChat(
-        { threadId: chatId, prompt, model, attachments: messageAttachments.map((attachment) => attachment.id) },
+        {
+          threadId: chatId,
+          prompt,
+          model,
+          reasoningEffort,
+          attachments: messageAttachments.map((attachment) => attachment.id),
+        },
         session.sessionToken,
         (event) => {
           if (event.type === 'session') {
@@ -798,6 +892,90 @@ export default function App() {
             scheduleFlush();
             return;
           }
+          if (event.type === 'reasoning_delta') {
+            pendingReasoningDelta += event.delta;
+            scheduleFlush();
+            return;
+          }
+          if (event.type === 'reasoning') {
+            if (flushTimer !== null) {
+              clearTimeout(flushTimer);
+              flushTimer = null;
+            }
+            flushPendingDelta();
+            updateChat(chatId, (chat) => ({
+              ...chat,
+              updatedAt: new Date().toISOString(),
+              messages: sortMessages(
+                chat.messages.map((message) =>
+                  message.id === assistantMessageId
+                    ? {
+                        ...message,
+                        metadata: {
+                          ...(message.metadata ?? {}),
+                          reasoning: event.content,
+                          reasoningState: 'complete',
+                        },
+                      }
+                    : message,
+                ),
+              ),
+            }));
+            return;
+          }
+          if (event.type === 'usage') {
+            updateChat(chatId, (chat) => ({
+              ...chat,
+              messages: sortMessages(
+                chat.messages.map((message) =>
+                  message.id === assistantMessageId
+                    ? {
+                        ...message,
+                        metadata: {
+                          ...(message.metadata ?? {}),
+                          usage: event.usage,
+                        },
+                      }
+                    : message,
+                ),
+              ),
+            }));
+            return;
+          }
+          if (event.type === 'tool_event') {
+            updateChat(chatId, (chat) => ({
+              ...chat,
+              messages: sortMessages(
+                chat.messages.map((message) =>
+                  message.id === assistantMessageId
+                    ? {
+                        ...message,
+                        metadata: {
+                          ...(message.metadata ?? {}),
+                          toolActivities: upsertToolActivity(message.metadata?.toolActivities, event.activity),
+                        },
+                      }
+                    : message,
+                ),
+              ),
+            }));
+            return;
+          }
+          if (event.type === 'user_input_request') {
+            updateChat(chatId, (chat) => ({
+              ...chat,
+              pendingUserInputRequest: event.request,
+            }));
+            return;
+          }
+          if (event.type === 'user_input_cleared') {
+            updateChat(chatId, (chat) => ({
+              ...chat,
+              pendingUserInputRequest:
+                chat.pendingUserInputRequest?.requestId === event.requestId ? undefined : chat.pendingUserInputRequest,
+            }));
+            return;
+          }
           if (event.type === 'error') {
             if (flushTimer !== null) {
               clearTimeout(flushTimer);
@@ -807,6 +985,7 @@ export default function App() {
             updateChat(chatId, (chat) => ({
               ...chat,
               updatedAt: new Date().toISOString(),
+              pendingUserInputRequest: undefined,
               messages: sortMessages(
                 chat.messages.map((message) =>
                   message.id === assistantMessageId ? { ...message, role: 'error', content: event.message } : message,
@@ -828,6 +1007,7 @@ export default function App() {
               return {
                 ...chat,
                 updatedAt: new Date().toISOString(),
+                pendingUserInputRequest: undefined,
                 messages: sortMessages(
                   chat.messages.map((message) =>
                     message.id === assistantMessageId
@@ -839,6 +1019,7 @@ export default function App() {
                 ),
               };
             });
+            return;
           }
         },
       );
@@ -853,6 +1034,7 @@ export default function App() {
       updateChat(chatId, (chat) => ({
         ...chat,
         updatedAt: new Date().toISOString(),
+        pendingUserInputRequest: undefined,
         messages: sortMessages(
           chat.messages.map((messageItem) =>
             messageItem.id === assistantMessageId ? { ...messageItem, role: 'error', content: message } : messageItem,
@@ -1117,13 +1299,48 @@ export default function App() {
                     if (!selectedChat) {
                       return;
                     }
-                    updateChat(selectedChat.id, (chat) => ({ ...chat, model: event.target.value }));
+
+                    const nextModelId = event.target.value;
+                    const nextModel = models.find((model) => model.id === nextModelId);
+                    const nextReasoningEffort =
+                      nextModel?.capabilities?.supports.reasoningEffort
+                        ? selectedChat.reasoningEffort && nextModel.supportedReasoningEfforts?.includes(selectedChat.reasoningEffort)
+                          ? selectedChat.reasoningEffort
+                          : nextModel.defaultReasoningEffort ?? nextModel.supportedReasoningEfforts?.[0] ?? null
+                        : null;
+
+                    void handleThreadConfigChange(selectedChat.id, {
+                      model: nextModelId,
+                      reasoningEffort: nextReasoningEffort,
+                    });
                   }}
-                  disabled={!selectedChat || !models.length}
+                  disabled={!selectedChat || !models.length || savingThreadConfigId === selectedChat?.id}
                 >
                   {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
                 </select>
               </label>
+              {selectedChat && selectedModel?.capabilities?.supports.reasoningEffort ? (
+                <label className="header-model-field" htmlFor="header-reasoning">
+                  <span className="header-model-label">Thinking</span>
+                  <select
+                    id="header-reasoning"
+                    className="select header-model-select"
+                    value={activeReasoningEffort ?? ''}
+                    onChange={(event) =>
+                      void handleThreadConfigChange(selectedChat.id, {
+                        reasoningEffort: (event.target.value || null) as ReasoningEffort | null,
+                      })
+                    }
+                    disabled={!selectedReasoningEfforts.length || savingThreadConfigId === selectedChat.id}
+                  >
+                    {selectedReasoningEfforts.map((effort) => (
+                      <option key={effort} value={effort}>
+                        {effort}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <IconButton label="Start new chat" onClick={() => void handleCreateChat()}>
                 <PlusIcon />
               </IconButton>
@@ -1164,6 +1381,57 @@ export default function App() {
                     </div>
                   </div>
                 ))}
+              </div>
+            ) : null}
+
+            {selectedChat?.pendingUserInputRequest ? (
+              <div className="user-input-card">
+                <div className="status-label">Copilot needs input</div>
+                <div className="user-input-question">{selectedChat.pendingUserInputRequest.question}</div>
+                {selectedChat.pendingUserInputRequest.choices?.length ? (
+                  <div className="user-input-choices">
+                    {selectedChat.pendingUserInputRequest.choices.map((choice) => (
+                      <button
+                        key={choice}
+                        className="ghost-button"
+                        disabled={respondingToUserInputId === selectedChat.pendingUserInputRequest?.requestId}
+                        onClick={() => void handleRespondToPendingInput(selectedChat.pendingUserInputRequest!.requestId, choice)}
+                      >
+                        {choice}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {selectedChat.pendingUserInputRequest.allowFreeform ? (
+                  <div className="inline-form">
+                    <input
+                      className="input"
+                      value={userInputDrafts[selectedChat.pendingUserInputRequest.requestId] ?? ''}
+                      onChange={(event) =>
+                        setUserInputDrafts((current) => ({
+                          ...current,
+                          [selectedChat.pendingUserInputRequest!.requestId]: event.target.value,
+                        }))
+                      }
+                      placeholder="Type your answer"
+                    />
+                    <button
+                      className="button"
+                      disabled={
+                        respondingToUserInputId === selectedChat.pendingUserInputRequest.requestId ||
+                        !(userInputDrafts[selectedChat.pendingUserInputRequest.requestId] ?? '').trim()
+                      }
+                      onClick={() =>
+                        void handleRespondToPendingInput(
+                          selectedChat.pendingUserInputRequest!.requestId,
+                          (userInputDrafts[selectedChat.pendingUserInputRequest!.requestId] ?? '').trim(),
+                        )
+                      }
+                    >
+                      {respondingToUserInputId === selectedChat.pendingUserInputRequest.requestId ? 'Sending…' : 'Send answer'}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 

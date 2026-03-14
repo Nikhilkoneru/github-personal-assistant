@@ -165,12 +165,56 @@ export type ProjectDetail = ProjectSummary;
 
 export type ChatRole = 'user' | 'assistant' | 'system' | 'error';
 
+export type ChatUsage = {
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  cost?: number;
+  duration?: number;
+  initiator?: string;
+};
+
+export type ChatToolActivity = {
+  id: string;
+  toolName: string;
+  status: 'running' | 'completed' | 'failed';
+  startedAt: string;
+  updatedAt: string;
+  arguments?: string;
+  result?: string;
+  additionalContext?: string;
+  permissionDecision?: 'allow' | 'deny' | 'ask';
+  permissionDecisionReason?: string;
+  suppressed?: boolean;
+  error?: string;
+};
+
+export type ChatMessageMetadata = {
+  sessionMessageId?: string;
+  reasoning?: string;
+  reasoningState?: 'streaming' | 'complete';
+  usage?: ChatUsage;
+  toolActivities?: ChatToolActivity[];
+  phase?: string;
+};
+
+export type ChatUserInputRequest = {
+  requestId: string;
+  question: string;
+  choices?: string[];
+  allowFreeform: boolean;
+  createdAt: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: ChatRole;
   content: string;
   createdAt: string;
   attachments?: AttachmentSummary[];
+  metadata?: ChatMessageMetadata;
 };
 
 export type ThreadSummary = {
@@ -183,28 +227,44 @@ export type ThreadSummary = {
   createdAt: string;
   copilotSessionId?: string;
   lastMessagePreview?: string;
+  reasoningEffort?: ReasoningEffort;
 };
 
 export type ThreadDetail = ThreadSummary & {
   messages: ChatMessage[];
+  pendingUserInputRequest?: ChatUserInputRequest;
 };
 
 export type CreateThreadInput = {
   projectId?: string;
   title?: string;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
+};
+
+export type UpdateThreadInput = {
+  projectId?: string | null;
+  model?: string;
+  reasoningEffort?: ReasoningEffort | null;
 };
 
 export type ChatStreamInput = {
   threadId: string;
   prompt: string;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   attachments?: string[];
 };
 
 export type ChatStreamEvent =
   | { type: 'session'; sessionId: string }
   | { type: 'chunk'; delta: string }
+  | { type: 'reasoning_delta'; delta: string }
+  | { type: 'reasoning'; content: string }
+  | { type: 'usage'; usage: ChatUsage }
+  | { type: 'tool_event'; activity: ChatToolActivity }
+  | { type: 'user_input_request'; request: ChatUserInputRequest }
+  | { type: 'user_input_cleared'; requestId: string }
   | { type: 'aborted'; message: string }
   | { type: 'done' }
   | { type: 'error'; message: string };

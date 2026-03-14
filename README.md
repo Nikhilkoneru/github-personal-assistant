@@ -1,6 +1,6 @@
 # Github Personal Assistant
 
-Mac-hosted personal developer assistant with a React web client, a Node API, durable chat persistence, and GitHub Copilot SDK-driven chat sessions.
+Mac-hosted personal developer assistant with a React web client, a Node API, lightweight local metadata storage, and GitHub Copilot SDK-driven chat sessions.
 
 This project is currently designed around a **single-user daemon** running on your Mac. The web UI is a remote shell for that daemon, not a multi-tenant SaaS product.
 
@@ -19,7 +19,7 @@ Projects currently behave like **lightweight grouping only**. Chats are the prim
 ## Workspace
 
 - `apps/client` — static React web client and PWA shell
-- `apps/api` — Express + TypeScript API with SQLite persistence, auth/session handling, attachment processing, and Copilot SDK chat orchestration
+- `apps/api` — Express + TypeScript API with SQLite metadata persistence, auth/session handling, attachment processing, and Copilot SDK chat orchestration
 - `packages/shared` — shared API and app types
 
 ## Current architecture
@@ -84,8 +84,9 @@ Near-term UX direction that is **desired but not fully implemented yet**:
 
 - Single-user local auth with automatic session bootstrap plus optional GitHub device/OAuth sign-in
 - Backend-advertised auth capabilities via `/api/auth/capabilities`
-- Durable SQLite-backed sessions, projects, threads, messages, and attachments
-- Streaming chat route with server-side thread persistence and real Copilot errors surfaced inline
+- Durable SQLite-backed app metadata for sessions, projects, threads, preferences, and attachments
+- Copilot SDK session history used as the source of truth for chat replay, reasoning, tool activity, and usage
+- Streaming chat route with real Copilot errors surfaced inline
 - Backend-managed model listing from the Copilot SDK
 - Copilot SDK status/session inspection plus deletion via `/api/copilot/status` and `/api/copilot/sessions/:sessionId`
 - Rich Copilot model metadata including capabilities, billing, policy, and reasoning-effort support
@@ -223,37 +224,41 @@ The current implementation already adopts a meaningful part of the SDK:
 - model listing
 - status/auth overview
 - session listing and deletion
-- SSE streaming with `assistant.message_delta`
+- SSE streaming with:
+  - `assistant.message_delta`
+  - `assistant.reasoning_delta`
+  - `assistant.reasoning`
+  - `assistant.usage`
+  - tool execution activity
+  - `ask_user`-style user input requests
+- `session.getMessages()`-backed replay for thread detail
 - app-owned custom tools:
-  - `lookup_project_knowledge`
   - `list_thread_attachments`
 
 It also uses:
 
 - model selection
-- reasoning-effort config
+- per-thread reasoning-effort config
 - system-message injection
 - session reuse tied to app thread IDs
+- SDK session history as the canonical chat/event log, with SQLite only storing app-owned metadata and previews
 
 ## Copilot SDK features still worth adopting
 
-The SDK surface is broader than what is currently wired. The most relevant missing pieces for this product are:
+The SDK surface is broader than what is currently wired. The most relevant remaining opportunities for this product are:
 
 ### High priority
 
-- request cancellation via `session.abort()`
-- richer session hooks for logging and error handling
-- reasoning stream support (`assistant.reasoning_delta`, `assistant.reasoning`)
-- timeout-safe `sendAndWait()` flow where it makes sense
-- more deliberate permission handling instead of broad approval
+- richer hook-driven audit/automation beyond the current activity surface
+- more deliberate interactive permission UX beyond the daemon-level approval policy
+- better image/vision handling for models that support vision
+- surface model capability limits more clearly in the UI
 
 ### Medium priority
 
-- expose token usage / assistant usage events
-- use `session.getMessages()` for richer replay or diagnostics
-- support user-input requests if the agent needs to ask clarifying questions mid-session
-- better image/vision handling for models that support vision
-- surface model capability limits more clearly in the UI
+- deeper session diagnostics and inspection
+- richer per-tool permission explanations in the chat UI
+- optional session timeline filters / debugging views
 
 ### Lower priority
 
@@ -264,9 +269,9 @@ The SDK surface is broader than what is currently wired. The most relevant missi
 
 ## Copilot SDK implementation roadmap
 
-If we want **fuller Copilot SDK integration** for this product, the clean implementation path is:
+If we want to keep pushing the Copilot SDK integration further, the clean implementation path is:
 
-### Phase 1 — core runtime control
+### Phase 1 — now implemented
 
 Goal: make active sessions safer and more controllable.
 
@@ -294,16 +299,23 @@ Expected outcome:
 - fewer hung session edge cases
 - better control over risky tool execution
 
-### Phase 2 — richer streaming and observability
+Implemented:
 
-Goal: expose more of what the SDK already emits.
+- request cancellation using `session.abort()`
+- `sendAndWait()`-based streaming lifecycle
+- daemon-level approval policy (`approve-all` vs `safer-defaults`)
+
+### Phase 2 — now implemented
+
+Goal: expose more of what the SDK already emits and stop duplicating chat history.
 
 Implement:
 
 - subscribe to `assistant.reasoning_delta` and `assistant.reasoning`
 - capture `assistant.usage`
-- add optional route/service support for `session.getMessages()`
-- persist useful diagnostics or replay metadata on the app side
+- load thread detail from `session.getMessages()`
+- support `ask_user`-style user input requests
+- surface tool execution activity in the chat UI
 
 Main files:
 
@@ -317,7 +329,7 @@ Expected outcome:
 
 - richer live response UX for reasoning models
 - token/cost/performance visibility
-- better debugging and session replay
+- better debugging and session replay without duplicating full transcripts in SQLite
 
 ### Phase 3 — interactive agent flows and multimodal polish
 

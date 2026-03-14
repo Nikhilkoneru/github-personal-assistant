@@ -64,10 +64,6 @@ CREATE TABLE IF NOT EXISTS projects (
   github_user_id TEXT NOT NULL REFERENCES users(github_user_id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT NOT NULL,
-  default_model TEXT NOT NULL,
-  instructions TEXT NOT NULL,
-  ragflow_dataset_id TEXT,
-  ragflow_dataset_name TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -79,6 +75,8 @@ CREATE TABLE IF NOT EXISTS threads (
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
   model TEXT NOT NULL,
+  reasoning_effort TEXT,
+  last_message_preview TEXT,
   copilot_session_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -86,54 +84,24 @@ CREATE TABLE IF NOT EXISTS threads (
 CREATE INDEX IF NOT EXISTS idx_threads_user ON threads(github_user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_project ON threads(project_id, updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY,
-  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  role TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, created_at ASC);
-
 CREATE TABLE IF NOT EXISTS attachments (
   id TEXT PRIMARY KEY,
   github_user_id TEXT NOT NULL REFERENCES users(github_user_id) ON DELETE CASCADE,
   thread_id TEXT REFERENCES threads(id) ON DELETE SET NULL,
-  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   name TEXT NOT NULL,
   mime_type TEXT NOT NULL,
   size INTEGER NOT NULL,
   kind TEXT NOT NULL,
-  scope TEXT NOT NULL DEFAULT 'thread',
-  knowledge_status TEXT NOT NULL DEFAULT 'none',
   file_path TEXT NOT NULL,
   pdf_context_file_path TEXT,
   pdf_extraction TEXT,
   pdf_page_count INTEGER,
   pdf_title TEXT,
-  ragflow_dataset_id TEXT,
-  ragflow_document_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   uploaded_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attachments_user ON attachments(github_user_id, uploaded_at DESC);
-CREATE INDEX IF NOT EXISTS idx_attachments_project_scope ON attachments(project_id, scope, uploaded_at DESC);
-
-CREATE TABLE IF NOT EXISTS message_attachments (
-  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
-  PRIMARY KEY (message_id, attachment_id)
-);
-
-CREATE TABLE IF NOT EXISTS service_clients (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  access_token TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL,
-  last_seen_at TEXT
-);
 
 CREATE TABLE IF NOT EXISTS app_preferences (
   key TEXT PRIMARY KEY,
@@ -150,5 +118,7 @@ const ensureColumn = (table: string, column: string, alterSql: string) => {
 };
 
 ensureColumn('app_sessions', 'auth_mode', "ALTER TABLE app_sessions ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'github-device';");
+ensureColumn('threads', 'reasoning_effort', 'ALTER TABLE threads ADD COLUMN reasoning_effort TEXT;');
+ensureColumn('threads', 'last_message_preview', 'ALTER TABLE threads ADD COLUMN last_message_preview TEXT;');
 
 export const nowIso = () => new Date().toISOString();

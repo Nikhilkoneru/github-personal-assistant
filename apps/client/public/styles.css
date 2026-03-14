@@ -226,6 +226,21 @@ button { cursor: pointer; }
 .main-header-leading { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
 .header-copy { min-width: 0; }
 .main-subtitle { margin-top: 6px; color: var(--muted); font-size: 0.92rem; }
+.header-model-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.header-model-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.header-model-select {
+  min-width: 180px;
+  max-width: 240px;
+}
 .mobile-menu-trigger { display: none; }
 
 .message-scroll {
@@ -318,40 +333,6 @@ button { cursor: pointer; }
   width: 38px;
   height: 38px;
   border-radius: 12px;
-}
-.composer-options {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 180ms ease;
-}
-.composer-options.open { grid-template-rows: 1fr; }
-.composer-options-inner {
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.composer-select { width: auto; min-width: 170px; max-width: 240px; }
-.model-toggle {
-  border: 1px solid var(--border);
-  background: rgba(15, 23, 42, 0.72);
-  color: var(--text);
-  border-radius: 999px;
-  padding: 9px 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  max-width: min(44vw, 260px);
-  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
-}
-.model-toggle:hover { transform: translateY(-1px); border-color: rgba(96, 165, 250, 0.28); }
-.model-toggle.open { background: rgba(30, 41, 59, 0.88); border-color: rgba(96, 165, 250, 0.35); }
-.model-toggle .icon { transition: transform 160ms ease; }
-.model-toggle.open .icon { transform: rotate(180deg); }
-.model-toggle-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .composer-send-button {
   width: 42px;
@@ -531,12 +512,24 @@ button { cursor: pointer; }
   .status-grid { grid-template-columns: 1fr; }
   .modal-actions { flex-direction: column; }
   .modal-actions > * { width: 100%; }
-  .composer-select { flex: 1 1 220px; max-width: none; }
+  .header-model-select { min-width: 150px; max-width: 220px; }
 }
 
 @media (max-width: 640px) {
   .main-header-actions {
+    width: 100%;
     justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .header-model-field {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+
+  .header-model-select {
+    flex: 1 1 180px;
+    max-width: none;
   }
 
   .main-header-actions > * {
@@ -554,11 +547,6 @@ button { cursor: pointer; }
 
   .composer-controls {
     flex-wrap: wrap;
-  }
-
-  .model-toggle {
-    flex: 1 1 180px;
-    max-width: none;
   }
 
   .message-bubble {

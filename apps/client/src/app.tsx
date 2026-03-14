@@ -129,14 +129,6 @@ function PlusIcon() {
   );
 }
 
-function ChevronDownIcon() {
-  return (
-    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="m6 9 6 6 6-6" />
-    </svg>
-  );
-}
-
 function SendIcon() {
   return (
     <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -197,7 +189,6 @@ export default function App() {
   const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [isStandalone, setIsStandalone] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
-  const [composerOptionsOpen, setComposerOptionsOpen] = useState(false);
   const [isUpdateReady, setIsUpdateReady] = useState(false);
   const [isApplyingUpdate, setIsApplyingUpdate] = useState(false);
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -240,7 +231,6 @@ export default function App() {
       setChats([]);
       setSelectedChatId(null);
       setDraft('');
-      setComposerOptionsOpen(false);
     }
   }, [session]);
 
@@ -253,10 +243,6 @@ export default function App() {
   useEffect(() => {
     void refreshConnectionState();
   }, [refreshConnectionState]);
-
-  useEffect(() => {
-    setComposerOptionsOpen(false);
-  }, [selectedChatId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -443,10 +429,7 @@ export default function App() {
   const selectedChat = useMemo(() => chats.find((chat) => chat.id === selectedChatId) ?? chats[0] ?? null, [chats, selectedChatId]);
   const orderedChats = useMemo(() => [...chats].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)), [chats]);
   const activeModelId = selectedChat?.model ?? defaultModel;
-  const activeModelName = models.find((model) => model.id === activeModelId)?.name ?? activeModelId;
-  const headerMeta = [selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : null, selectedChat?.copilotSessionId ? 'Resumable' : null]
-    .filter((value): value is string => Boolean(value))
-    .join(' · ');
+  const headerMeta = selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : '';
 
   useEffect(() => {
     messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' });
@@ -712,7 +695,6 @@ export default function App() {
 
     setDraft('');
     setError(null);
-    setComposerOptionsOpen(false);
     setStreamingChatId(chatId);
     updateChat(chatId, (chat) => ({
       ...chat,
@@ -980,6 +962,23 @@ export default function App() {
               </div>
             </div>
             <div className="main-header-actions">
+              <label className="header-model-field" htmlFor="header-model">
+                <span className="header-model-label">Model</span>
+                <select
+                  id="header-model"
+                  className="select header-model-select"
+                  value={activeModelId}
+                  onChange={(event) => {
+                    if (!selectedChat) {
+                      return;
+                    }
+                    updateChat(selectedChat.id, (chat) => ({ ...chat, model: event.target.value }));
+                  }}
+                  disabled={!selectedChat || !models.length}
+                >
+                  {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+                </select>
+              </label>
               <IconButton label="Start new chat" onClick={() => void handleCreateChat()}>
                 <PlusIcon />
               </IconButton>
@@ -1056,16 +1055,6 @@ export default function App() {
                   >
                     <PaperclipIcon />
                   </IconButton>
-                  <button
-                    type="button"
-                    className={`model-toggle ${composerOptionsOpen ? 'open' : ''}`}
-                    onClick={() => setComposerOptionsOpen((open) => !open)}
-                    aria-expanded={composerOptionsOpen}
-                    aria-controls="composer-model"
-                  >
-                    <span className="model-toggle-label">{activeModelName}</span>
-                    <ChevronDownIcon />
-                  </button>
                 </div>
                 <button
                   type="button"
@@ -1077,25 +1066,6 @@ export default function App() {
                 >
                   <SendIcon />
                 </button>
-              </div>
-            </div>
-            <div className={`composer-options ${composerOptionsOpen ? 'open' : ''}`}>
-              <div className="composer-options-inner">
-                <label className="modal-label" htmlFor="composer-model">Model</label>
-                <select
-                  id="composer-model"
-                  className="select composer-select"
-                  value={activeModelId}
-                  onChange={(event) => {
-                    if (!selectedChat) {
-                      return;
-                    }
-                    updateChat(selectedChat.id, (chat) => ({ ...chat, model: event.target.value }));
-                    setComposerOptionsOpen(false);
-                  }}
-                >
-                  {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-                </select>
               </div>
             </div>
           </footer>

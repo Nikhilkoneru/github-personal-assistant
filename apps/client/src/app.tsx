@@ -136,6 +136,15 @@ function ChevronDownIcon() {
   );
 }
 
+function SendIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M22 2 11 13" />
+      <path d="m22 2-7 20-4-9-9-4Z" />
+    </svg>
+  );
+}
+
 function IconButton({
   label,
   onClick,
@@ -416,6 +425,9 @@ export default function App() {
   const orderedChats = useMemo(() => [...chats].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)), [chats]);
   const activeModelId = selectedChat?.model ?? defaultModel;
   const activeModelName = models.find((model) => model.id === activeModelId)?.name ?? activeModelId;
+  const headerMeta = [selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : null, selectedChat?.copilotSessionId ? 'Resumable' : null]
+    .filter((value): value is string => Boolean(value))
+    .join(' · ');
 
   useEffect(() => {
     messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' });
@@ -915,10 +927,7 @@ export default function App() {
               </IconButton>
               <div className="header-copy">
                 <h1 className="main-title">{selectedChat?.title ?? 'New chat'}</h1>
-                <div className="main-subtitle">
-                  {selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : 'No project attached'}
-                  {selectedChat?.copilotSessionId ? ' · resumable' : ''}
-                </div>
+                {headerMeta ? <div className="main-subtitle">{headerMeta}</div> : null}
               </div>
             </div>
             <div className="main-header-actions">
@@ -980,7 +989,46 @@ export default function App() {
               </div>
             ) : null}
 
-            <textarea className="textarea" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={selectedChat?.projectName ? `Ask about ${selectedChat.projectName}...` : 'Ask anything...'} />
+            <div className="composer-shell">
+              <textarea
+                className="textarea composer-textarea"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder={selectedChat?.projectName ? `Ask about ${selectedChat.projectName}...` : 'Ask anything...'}
+              />
+              <div className="composer-controls">
+                <div className="composer-tools">
+                  <IconButton
+                    label={uploadingAttachment ? 'Uploading files' : 'Add files'}
+                    onClick={handleChooseFiles}
+                    disabled={uploadingAttachment}
+                    className={uploadingAttachment ? 'is-busy composer-tool-button' : 'composer-tool-button'}
+                  >
+                    <PaperclipIcon />
+                  </IconButton>
+                  <button
+                    type="button"
+                    className={`model-toggle ${composerOptionsOpen ? 'open' : ''}`}
+                    onClick={() => setComposerOptionsOpen((open) => !open)}
+                    aria-expanded={composerOptionsOpen}
+                    aria-controls="composer-model"
+                  >
+                    <span className="model-toggle-label">{activeModelName}</span>
+                    <ChevronDownIcon />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="composer-send-button"
+                  onClick={() => void handleSend()}
+                  disabled={Boolean(streamingChatId) || !draft.trim()}
+                  aria-label={streamingChatId ? 'Streaming response' : 'Send message'}
+                  title={streamingChatId ? 'Streaming response' : 'Send message'}
+                >
+                  <SendIcon />
+                </button>
+              </div>
+            </div>
             <div className={`composer-options ${composerOptionsOpen ? 'open' : ''}`}>
               <div className="composer-options-inner">
                 <label className="modal-label" htmlFor="composer-model">Model</label>
@@ -999,26 +1047,6 @@ export default function App() {
                   {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
                 </select>
               </div>
-            </div>
-            <div className="composer-toolbar">
-              <div className="composer-tools">
-                <IconButton label={uploadingAttachment ? 'Uploading files' : 'Add files'} onClick={handleChooseFiles} disabled={uploadingAttachment} className={uploadingAttachment ? 'is-busy' : undefined}>
-                  <PaperclipIcon />
-                </IconButton>
-                <button
-                  type="button"
-                  className={`model-toggle ${composerOptionsOpen ? 'open' : ''}`}
-                  onClick={() => setComposerOptionsOpen((open) => !open)}
-                  aria-expanded={composerOptionsOpen}
-                  aria-controls="composer-model"
-                >
-                  <span className="model-toggle-label">{activeModelName}</span>
-                  <ChevronDownIcon />
-                </button>
-              </div>
-              <button className="button" onClick={() => void handleSend()} disabled={Boolean(streamingChatId) || !draft.trim()}>
-                {streamingChatId ? 'Streaming...' : 'Send'}
-              </button>
             </div>
           </footer>
         </main>

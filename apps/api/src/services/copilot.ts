@@ -18,9 +18,9 @@ import type {
   ThreadSummary,
 } from '@github-personal-assistant/shared';
 
-import { env, canUseCopilot } from '../config';
-import type { ThreadAttachmentReference } from '../store/attachment-store';
-import { listThreadAttachmentReferences } from '../store/attachment-store';
+import { env, canUseCopilot } from '../config.js';
+import type { ThreadAttachmentReference } from '../store/attachment-store.js';
+import { listThreadAttachmentReferences } from '../store/attachment-store.js';
 
 type CopilotSdkModule = typeof import('@github/copilot-sdk');
 type SessionEvent = Awaited<ReturnType<CopilotSession['getMessages']>>[number];

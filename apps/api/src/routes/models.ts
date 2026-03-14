@@ -1,7 +1,7 @@
 import { Router } from 'express';
 
-import { requireRequestSession } from '../lib/auth';
-import { listModels } from '../services/copilot';
+import { requireRequestSession } from '../lib/auth.js';
+import { listModels } from '../services/copilot.js';
 
 const router = Router();
 

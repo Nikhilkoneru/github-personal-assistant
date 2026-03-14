@@ -3,8 +3,8 @@ import { z } from 'zod';
 
 import type { AuthCapabilities, GitHubDeviceAuthPoll } from '@github-personal-assistant/shared';
 
-import { env, getAuthConfigVersion, getCopilotAuthMode, isActiveAppAuthConfigured, isDeviceOAuthConfigured, isOAuthConfigured } from '../config';
-import { getRequestSession, requireServiceAccess } from '../lib/auth';
+import { env, getAuthConfigVersion, getCopilotAuthMode, isActiveAppAuthConfigured, isDeviceOAuthConfigured, isOAuthConfigured } from '../config.js';
+import { getRequestSession, requireServiceAccess } from '../lib/auth.js';
 import {
   completeDeviceAuth,
   consumeOAuthState,
@@ -17,7 +17,7 @@ import {
   getDeviceAuthPollPayload,
   getDeviceAuthRecord,
   scheduleDeviceAuthPoll,
-} from '../store/auth-store';
+} from '../store/auth-store.js';
 
 const router = Router();
 const GITHUB_SCOPE = 'read:user user:email';

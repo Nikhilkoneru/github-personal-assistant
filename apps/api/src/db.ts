@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { env } from './config';
+import { env } from './config.js';
 
 const ensureDirectory = (targetPath: string) => {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });

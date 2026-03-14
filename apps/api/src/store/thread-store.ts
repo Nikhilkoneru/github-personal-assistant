@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 
 import type { CreateThreadInput, ReasoningEffort, ThreadDetail, ThreadSummary, UpdateThreadInput } from '@github-personal-assistant/shared';
 
-import { env } from '../config';
-import { db, nowIso } from '../db';
-import { getProjectRecord, touchProject } from './project-store';
+import { env } from '../config.js';
+import { db, nowIso } from '../db.js';
+import { getProjectRecord, touchProject } from './project-store.js';
 
 type ThreadRow = {
   id: string;

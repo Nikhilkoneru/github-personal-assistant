@@ -3,9 +3,9 @@ import type { CopilotApprovalMode } from '@github-personal-assistant/shared';
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { requireRequestSession } from '../lib/auth';
-import { deleteCopilotSession, getCopilotOverview } from '../services/copilot';
-import { getCopilotPreferences, setCopilotApprovalMode } from '../store/copilot-preferences-store';
+import { requireRequestSession } from '../lib/auth.js';
+import { deleteCopilotSession, getCopilotOverview } from '../services/copilot.js';
+import { getCopilotPreferences, setCopilotApprovalMode } from '../store/copilot-preferences-store.js';
 
 const router = Router();
 

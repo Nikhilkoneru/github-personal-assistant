@@ -3,11 +3,11 @@ import { z } from 'zod';
 
 import type { ChatStreamEvent, ChatToolActivity, ChatUserInputRequest, ReasoningEffort } from '@github-personal-assistant/shared';
 
-import { requireRequestSession } from '../lib/auth';
-import { getOrCreateSession } from '../services/copilot';
-import { buildAttachmentPromptContext, getAttachmentInputs } from '../store/attachment-store';
-import { getCopilotPreferences } from '../store/copilot-preferences-store';
-import { getThread, renameThreadIfPlaceholder, updateThread, updateThreadPreview, updateThreadSession } from '../store/thread-store';
+import { requireRequestSession } from '../lib/auth.js';
+import { getOrCreateSession } from '../services/copilot.js';
+import { buildAttachmentPromptContext, getAttachmentInputs } from '../store/attachment-store.js';
+import { getCopilotPreferences } from '../store/copilot-preferences-store.js';
+import { getThread, renameThreadIfPlaceholder, updateThread, updateThreadPreview, updateThreadSession } from '../store/thread-store.js';
 
 const router = Router();
 const SEND_AND_WAIT_TIMEOUT_MS = 10 * 60 * 1000;

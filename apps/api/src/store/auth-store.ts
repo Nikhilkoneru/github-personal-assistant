@@ -8,8 +8,8 @@ import type {
   UserSession,
 } from '@github-personal-assistant/shared';
 
-import { env } from '../config';
-import { db, nowIso } from '../db';
+import { env } from '../config.js';
+import { db, nowIso } from '../db.js';
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;

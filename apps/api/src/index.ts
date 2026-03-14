@@ -1,15 +1,15 @@
 import cors from 'cors';
 import express from 'express';
 
-import { env } from './config';
-import attachmentRoutes from './routes/attachments';
-import authRoutes from './routes/auth';
-import chatRoutes from './routes/chat';
-import copilotRoutes from './routes/copilot';
-import healthRoutes from './routes/health';
-import modelRoutes from './routes/models';
-import projectRoutes from './routes/projects';
-import threadRoutes from './routes/threads';
+import { env } from './config.js';
+import attachmentRoutes from './routes/attachments.js';
+import authRoutes from './routes/auth.js';
+import chatRoutes from './routes/chat.js';
+import copilotRoutes from './routes/copilot.js';
+import healthRoutes from './routes/health.js';
+import modelRoutes from './routes/models.js';
+import projectRoutes from './routes/projects.js';
+import threadRoutes from './routes/threads.js';
 
 const app = express();
 

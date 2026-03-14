@@ -3,10 +3,10 @@ import { z } from 'zod';
 
 import type { ReasoningEffort } from '@github-personal-assistant/shared';
 
-import { requireRequestSession } from '../lib/auth';
-import { getCopilotPreferences } from '../store/copilot-preferences-store';
-import { createThread, getThread, listThreads, updateThread } from '../store/thread-store';
-import { hydrateThreadDetailFromSession } from '../services/copilot';
+import { requireRequestSession } from '../lib/auth.js';
+import { getCopilotPreferences } from '../store/copilot-preferences-store.js';
+import { createThread, getThread, listThreads, updateThread } from '../store/thread-store.js';
+import { hydrateThreadDetailFromSession } from '../services/copilot.js';
 
 const router = Router();
 const reasoningEfforts = ['low', 'medium', 'high', 'xhigh'] satisfies [ReasoningEffort, ...ReasoningEffort[]];

@@ -1,6 +1,6 @@
 import type { CopilotApprovalMode, CopilotPreferences } from '@github-personal-assistant/shared';
 
-import { db, nowIso } from '../db';
+import { db, nowIso } from '../db.js';
 
 const APPROVAL_MODE_KEY = 'copilot_approval_mode';
 

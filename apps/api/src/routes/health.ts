@@ -8,7 +8,7 @@ import {
   isActiveAppAuthConfigured,
   isCopilotConfigured,
   isRemoteAccessConfigured,
-} from '../config';
+} from '../config.js';
 
 const router = Router();
 

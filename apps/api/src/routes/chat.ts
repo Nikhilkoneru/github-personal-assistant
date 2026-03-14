@@ -178,6 +178,8 @@ router.post('/api/chat/stream', async (request, response) => {
     session = (await getOrCreateSession({
       sessionId,
       githubToken: userSession.githubAccessToken,
+      ownerId,
+      threadId: thread.id,
       model,
       systemMessage: project?.instructions,
     })) as unknown as SessionLike;

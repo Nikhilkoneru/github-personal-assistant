@@ -4,8 +4,9 @@ import type { ApiHealth } from '@github-personal-assistant/shared';
 import {
   env,
   getApiOrigin,
+  getCopilotAuthMode,
+  isActiveAppAuthConfigured,
   isCopilotConfigured,
-  isDeviceOAuthConfigured,
   isRagFlowConfigured,
   isRemoteAccessConfigured,
 } from '../config';
@@ -16,7 +17,9 @@ router.get('/api/health', (_request, response) => {
   const payload: ApiHealth = {
     status: 'ok',
     copilotConfigured: isCopilotConfigured(),
-    authConfigured: isDeviceOAuthConfigured(),
+    authConfigured: isActiveAppAuthConfigured(),
+    authMode: env.appAuthMode,
+    copilotAuthMode: getCopilotAuthMode(),
     apiOrigin: getApiOrigin(),
     publicApiUrl: env.publicApiUrl,
     tailscaleApiUrl: env.tailscaleApiUrl,

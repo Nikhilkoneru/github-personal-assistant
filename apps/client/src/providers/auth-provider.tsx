@@ -1,86 +1,189 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { GitHubDeviceAuthStart, UserSession } from '@github-personal-assistant/shared';
+import type { AuthCapabilities, GitHubDeviceAuthStart, UserSession } from '@github-personal-assistant/shared';
 
-import { getSession, logout, pollGitHubDeviceAuth, registerUnauthorizedHandler, startGitHubDeviceAuth } from '../lib/api.js';
+import {
+  bootstrapLocalSession,
+  getAuthCapabilities,
+  getGitHubAuthorizeUrl,
+  getSession,
+  logout,
+  pollGitHubDeviceAuth,
+  registerUnauthorizedHandler,
+  startGitHubDeviceAuth,
+} from '../lib/api.js';
+import { API_URL_CHANGE_EVENT, resolveApiUrl } from '../lib/api-config.js';
 import { tokenStorage } from '../lib/token-storage.js';
+
+type SignOutOptions = {
+  manual?: boolean;
+};
 
 type AuthContextValue = {
   isRestoring: boolean;
   session: UserSession | null;
+  authCapabilities: AuthCapabilities | null;
   pendingDeviceAuth: GitHubDeviceAuthStart | null;
-  signInWithGitHub: () => Promise<void>;
+  signIn: () => Promise<void>;
   openPendingGitHubVerification: () => Promise<void>;
-  signOut: () => Promise<void>;
+  signOut: (options?: SignOutOptions) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const getRedirectSessionToken = () => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const url = new URL(window.location.href);
+  const sessionToken = url.searchParams.get('sessionToken');
+  if (!sessionToken) {
+    return null;
+  }
+
+  url.searchParams.delete('sessionToken');
+  url.searchParams.delete('login');
+  window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+  return sessionToken;
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isRestoring, setIsRestoring] = useState(true);
   const [session, setSession] = useState<UserSession | null>(null);
+  const [authCapabilities, setAuthCapabilities] = useState<AuthCapabilities | null>(null);
   const [pendingDeviceAuth, setPendingDeviceAuth] = useState<GitHubDeviceAuthStart | null>(null);
+  const manualLocalSignOutRef = useRef(false);
+  const activeApiUrlRef = useRef<string | null>(null);
+  const authCapabilitiesRef = useRef<AuthCapabilities | null>(null);
 
-  const clearLocalSession = useCallback(async () => {
-    await tokenStorage.clear();
+  useEffect(() => {
+    authCapabilitiesRef.current = authCapabilities;
+  }, [authCapabilities]);
+
+  const clearCachedSession = useCallback(async (apiUrl: string, capabilities: AuthCapabilities) => {
+    await tokenStorage.clear(apiUrl, capabilities.mode, capabilities.version);
+  }, []);
+
+  const clearLocalSessionState = useCallback(() => {
     setPendingDeviceAuth(null);
     setSession(null);
   }, []);
 
-  useEffect(() => {
-    registerUnauthorizedHandler(() => clearLocalSession());
-    return () => registerUnauthorizedHandler(null);
-  }, [clearLocalSession]);
+  const restore = useCallback(
+    async (options?: { allowLocalBootstrap?: boolean }) => {
+      const allowLocalBootstrap = options?.allowLocalBootstrap ?? true;
+      setIsRestoring(true);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const restore = async () => {
       try {
-        const token = await tokenStorage.get();
-        if (!token) {
-          return;
+        const [apiUrl, capabilities] = await Promise.all([resolveApiUrl(), getAuthCapabilities()]);
+        activeApiUrlRef.current = apiUrl;
+        setAuthCapabilities(capabilities);
+
+        let sessionToken = getRedirectSessionToken();
+        if (sessionToken) {
+          await tokenStorage.set(apiUrl, capabilities.mode, capabilities.version, sessionToken);
+        } else {
+          sessionToken = await tokenStorage.get(apiUrl, capabilities.mode, capabilities.version);
         }
 
-        try {
-          const payload = await getSession(token);
-          if (!isMounted) {
-            return;
+        if (sessionToken) {
+          try {
+            const payload = await getSession(sessionToken);
+            if (payload.session) {
+              setSession(payload.session);
+              setPendingDeviceAuth(null);
+              return;
+            }
+            await clearCachedSession(apiUrl, capabilities);
+          } catch (error) {
+            if (!(error instanceof Error) || !/unavailable right now/i.test(error.message)) {
+              await clearCachedSession(apiUrl, capabilities);
+            }
           }
-          if (payload.session) {
-            setSession(payload.session);
-          } else {
-            await clearLocalSession();
-          }
-        } catch (error) {
-          if (!isMounted) {
-            return;
-          }
-          if (error instanceof Error && /unavailable right now/i.test(error.message)) {
-            return;
-          }
-          await clearLocalSession();
+        }
+
+        clearLocalSessionState();
+
+        if (capabilities.mode === 'local' && allowLocalBootstrap && !manualLocalSignOutRef.current) {
+          const payload = await bootstrapLocalSession();
+          await tokenStorage.set(apiUrl, capabilities.mode, capabilities.version, payload.session.sessionToken);
+          setSession(payload.session);
         }
       } finally {
-        if (isMounted) {
-          setIsRestoring(false);
-        }
+        setIsRestoring(false);
       }
+    },
+    [clearCachedSession, clearLocalSessionState],
+  );
+
+  useEffect(() => {
+    void restore();
+  }, [restore]);
+
+  useEffect(() => {
+    const handleApiUrlChange = () => {
+      manualLocalSignOutRef.current = false;
+      void restore();
     };
 
-    void restore();
+    if (typeof window !== 'undefined') {
+      window.addEventListener(API_URL_CHANGE_EVENT, handleApiUrlChange);
+    }
+
     return () => {
-      isMounted = false;
+      if (typeof window !== 'undefined') {
+        window.removeEventListener(API_URL_CHANGE_EVENT, handleApiUrlChange);
+      }
     };
-  }, [clearLocalSession]);
+  }, [restore]);
+
+  const handleUnauthorized = useCallback(async () => {
+    const apiUrl = activeApiUrlRef.current;
+    const capabilities = authCapabilitiesRef.current;
+    if (apiUrl && capabilities) {
+      await clearCachedSession(apiUrl, capabilities);
+    }
+    clearLocalSessionState();
+
+    if (capabilities?.mode === 'local' && !manualLocalSignOutRef.current) {
+      await restore();
+    }
+  }, [clearCachedSession, clearLocalSessionState, restore]);
+
+  useEffect(() => {
+    registerUnauthorizedHandler(() => handleUnauthorized());
+    return () => registerUnauthorizedHandler(null);
+  }, [handleUnauthorized]);
 
   const openDeviceVerification = useCallback(async (deviceAuth: GitHubDeviceAuthStart) => {
     const targetUrl = deviceAuth.verificationUriComplete ?? deviceAuth.verificationUri;
     window.open(targetUrl, '_blank', 'noopener,noreferrer');
   }, []);
 
-  const signInWithGitHub = useCallback(async () => {
+  const signIn = useCallback(async () => {
+    const capabilities = authCapabilitiesRef.current ?? (await getAuthCapabilities());
+    const apiUrl = activeApiUrlRef.current ?? (await resolveApiUrl());
+    activeApiUrlRef.current = apiUrl;
+    setAuthCapabilities(capabilities);
+    manualLocalSignOutRef.current = false;
+
+    if (capabilities.mode === 'local') {
+      const payload = await bootstrapLocalSession();
+      await tokenStorage.set(apiUrl, capabilities.mode, capabilities.version, payload.session.sessionToken);
+      setPendingDeviceAuth(null);
+      setSession(payload.session);
+      return;
+    }
+
+    if (capabilities.mode === 'github-oauth') {
+      const redirectUri = window.location.href;
+      const payload = await getGitHubAuthorizeUrl(redirectUri);
+      window.location.assign(payload.authorizeUrl);
+      return;
+    }
+
     if (pendingDeviceAuth) {
       await openDeviceVerification(pendingDeviceAuth);
       return;
@@ -109,7 +212,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (status.status === 'complete') {
-        await tokenStorage.set(status.session.sessionToken);
+        await tokenStorage.set(apiUrl, capabilities.mode, capabilities.version, status.session.sessionToken);
         setSession(status.session);
         setPendingDeviceAuth(null);
         return;
@@ -128,20 +231,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await openDeviceVerification(pendingDeviceAuth);
   }, [openDeviceVerification, pendingDeviceAuth]);
 
-  const signOut = useCallback(async () => {
-    if (session) {
-      try {
-        await logout(session.sessionToken);
-      } catch {
-        // Clear the local session even if the backend already dropped it.
+  const signOut = useCallback(
+    async (options?: SignOutOptions) => {
+      const capabilities = authCapabilitiesRef.current;
+      const apiUrl = activeApiUrlRef.current;
+      const manual = options?.manual ?? false;
+
+      if (manual && capabilities?.mode === 'local') {
+        manualLocalSignOutRef.current = true;
       }
-    }
-    await clearLocalSession();
-  }, [clearLocalSession, session]);
+
+      if (session) {
+        try {
+          await logout(session.sessionToken);
+        } catch {
+          // The local cache should still be cleared if the daemon already dropped this session.
+        }
+      }
+
+      if (apiUrl && capabilities) {
+        await clearCachedSession(apiUrl, capabilities);
+      }
+
+      clearLocalSessionState();
+
+      if (!manual && capabilities?.mode === 'local') {
+        await restore();
+      }
+    },
+    [clearCachedSession, clearLocalSessionState, restore, session],
+  );
 
   const value = useMemo<AuthContextValue>(
-    () => ({ isRestoring, session, pendingDeviceAuth, signInWithGitHub, openPendingGitHubVerification, signOut }),
-    [isRestoring, openPendingGitHubVerification, pendingDeviceAuth, session, signInWithGitHub, signOut],
+    () => ({ isRestoring, session, authCapabilities, pendingDeviceAuth, signIn, openPendingGitHubVerification, signOut }),
+    [authCapabilities, isRestoring, openPendingGitHubVerification, pendingDeviceAuth, session, signIn, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -90,12 +90,12 @@ export const listThreads = (ownerId: string, projectId?: string) => {
          t.created_at,
          t.copilot_session_id,
          (
-           SELECT substr(m.content, 1, 160)
-           FROM messages m
-           WHERE m.thread_id = t.id
-           ORDER BY m.created_at DESC
-           LIMIT 1
-         ) AS last_message_preview
+            SELECT substr(m.content, 1, 160)
+            FROM messages m
+            WHERE m.thread_id = t.id
+            ORDER BY m.created_at DESC, m.rowid DESC
+            LIMIT 1
+          ) AS last_message_preview
        FROM threads t
        LEFT JOIN projects p ON p.id = t.project_id
        WHERE t.github_user_id = ? AND (? IS NULL OR t.project_id = ?)
@@ -119,12 +119,12 @@ export const getThread = (ownerId: string, threadId: string) => {
          t.created_at,
          t.copilot_session_id,
          (
-           SELECT substr(m.content, 1, 160)
-           FROM messages m
-           WHERE m.thread_id = t.id
-           ORDER BY m.created_at DESC
-           LIMIT 1
-         ) AS last_message_preview
+            SELECT substr(m.content, 1, 160)
+            FROM messages m
+            WHERE m.thread_id = t.id
+            ORDER BY m.created_at DESC, m.rowid DESC
+            LIMIT 1
+          ) AS last_message_preview
        FROM threads t
        LEFT JOIN projects p ON p.id = t.project_id
        WHERE t.github_user_id = ? AND t.id = ?`,
@@ -136,7 +136,7 @@ export const getThread = (ownerId: string, threadId: string) => {
 
 const listThreadMessages = (threadId: string) =>
   db
-    .prepare('SELECT id, thread_id, role, content, created_at, updated_at FROM messages WHERE thread_id = ? ORDER BY created_at ASC')
+    .prepare('SELECT id, thread_id, role, content, created_at, updated_at FROM messages WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC')
     .all(threadId) as MessageRow[];
 
 export const getThreadDetail = (ownerId: string, threadId: string) => {

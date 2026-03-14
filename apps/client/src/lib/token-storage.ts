@@ -1,19 +1,30 @@
-const SESSION_KEY = 'github-personal-assistant.session-token';
+const SESSION_PREFIX = 'github-personal-assistant.session-token';
 
 const canUseStorage = () => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 
+const toOriginKey = (apiUrl: string) => {
+  try {
+    return new URL(apiUrl).origin;
+  } catch {
+    return apiUrl;
+  }
+};
+
+const buildSessionKey = (apiUrl: string, authMode: string, authVersion: string) =>
+  `${SESSION_PREFIX}:${toOriginKey(apiUrl)}:${authMode}:${authVersion}`;
+
 export const tokenStorage = {
-  async get() {
-    return canUseStorage() ? window.localStorage.getItem(SESSION_KEY) : null;
+  async get(apiUrl: string, authMode: string, authVersion: string) {
+    return canUseStorage() ? window.localStorage.getItem(buildSessionKey(apiUrl, authMode, authVersion)) : null;
   },
-  async set(value: string) {
+  async set(apiUrl: string, authMode: string, authVersion: string, value: string) {
     if (canUseStorage()) {
-      window.localStorage.setItem(SESSION_KEY, value);
+      window.localStorage.setItem(buildSessionKey(apiUrl, authMode, authVersion), value);
     }
   },
-  async clear() {
+  async clear(apiUrl: string, authMode: string, authVersion: string) {
     if (canUseStorage()) {
-      window.localStorage.removeItem(SESSION_KEY);
+      window.localStorage.removeItem(buildSessionKey(apiUrl, authMode, authVersion));
     }
   },
 };

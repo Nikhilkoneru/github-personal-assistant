@@ -5,6 +5,7 @@ import { env } from './config';
 import attachmentRoutes from './routes/attachments';
 import authRoutes from './routes/auth';
 import chatRoutes from './routes/chat';
+import copilotRoutes from './routes/copilot';
 import healthRoutes from './routes/health';
 import modelRoutes from './routes/models';
 import projectRoutes from './routes/projects';
@@ -21,6 +22,7 @@ app.use(express.json({ limit: '1mb' }));
 
 app.use(healthRoutes);
 app.use(authRoutes);
+app.use(copilotRoutes);
 app.use(attachmentRoutes);
 app.use(modelRoutes);
 app.use(projectRoutes);

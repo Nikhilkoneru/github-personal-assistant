@@ -44,7 +44,9 @@ export const requireRequestSession = (request: Request, response: Response) => {
 
   const sessionToken = extractBearerToken(request);
   if (!sessionToken) {
-    response.status(401).json({ error: 'You must sign in to use this product.' });
+    response.status(401).json({
+      error: env.appAuthMode === 'local' ? 'Your local daemon session is missing. Start a new local session and try again.' : 'You must sign in to use this product.',
+    });
     return null;
   }
 

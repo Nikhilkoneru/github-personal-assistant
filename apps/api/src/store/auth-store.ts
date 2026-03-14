@@ -1,12 +1,14 @@
 import crypto from 'node:crypto';
 
 import type {
+  AppAuthMode,
   AppSessionUser,
   GitHubDeviceAuthPoll,
   GitHubDeviceAuthStart,
   UserSession,
 } from '@github-personal-assistant/shared';
 
+import { env } from '../config';
 import { db, nowIso } from '../db';
 
 const STATE_TTL_MS = 10 * 60 * 1000;
@@ -18,6 +20,7 @@ type PendingState = {
 };
 
 type StoredSession = UserSession & {
+  authMode: AppAuthMode;
   githubAccessToken: string;
 };
 
@@ -42,6 +45,29 @@ const upsertUserStatement = db.prepare(`
     updated_at = excluded.updated_at
 `);
 
+const findExistingDaemonOwnerId = () => {
+  const row = db
+    .prepare(`
+      SELECT github_user_id
+      FROM users
+      ORDER BY updated_at DESC, created_at DESC, github_user_id DESC
+      LIMIT 1
+    `)
+    .get() as { github_user_id: string } | undefined;
+  return row?.github_user_id ?? env.daemonOwnerId;
+};
+
+const buildDaemonOwnerUser = (profile?: {
+  login?: string;
+  name?: string | null;
+  avatarUrl?: string;
+}): AppSessionUser => ({
+  id: findExistingDaemonOwnerId(),
+  login: profile?.login?.trim() || env.daemonOwnerLogin,
+  name: profile?.name ?? env.daemonOwnerName,
+  avatarUrl: profile?.avatarUrl,
+});
+
 const prune = () => {
   const now = nowIso();
   db.prepare('DELETE FROM oauth_states WHERE expires_at < ?').run(now);
@@ -63,7 +89,7 @@ const toUserSession = (row: {
 }): UserSession => ({
   sessionToken: row.session_token,
   user: {
-    id: Number(row.github_user_id),
+    id: row.github_user_id,
     login: row.login,
     name: row.name,
     avatarUrl: row.avatar_url ?? undefined,
@@ -76,9 +102,9 @@ const loadSession = (sessionToken: string): StoredSession | null => {
       SELECT s.session_token, s.github_access_token, u.github_user_id, u.login, u.name, u.avatar_url
       FROM app_sessions s
       JOIN users u ON u.github_user_id = s.github_user_id
-      WHERE s.session_token = ? AND s.expires_at >= ?
+      WHERE s.session_token = ? AND s.expires_at >= ? AND s.auth_mode = ?
     `)
-    .get(sessionToken, nowIso()) as
+    .get(sessionToken, nowIso(), env.appAuthMode) as
     | {
         session_token: string;
         github_access_token: string;
@@ -95,6 +121,7 @@ const loadSession = (sessionToken: string): StoredSession | null => {
 
   return {
     ...toUserSession(row),
+    authMode: env.appAuthMode,
     githubAccessToken: row.github_access_token,
   };
 };
@@ -164,10 +191,19 @@ export const consumeOAuthState = (state: string): PendingState | null => {
   return row ? { redirectUri: row.redirect_uri ?? undefined } : null;
 };
 
-export const createAppSession = (githubAccessToken: string, user: AppSessionUser): UserSession => {
+export const createAppSession = (input: {
+  authMode: AppAuthMode;
+  githubAccessToken?: string;
+  profile?: {
+    login?: string;
+    name?: string | null;
+    avatarUrl?: string;
+  };
+}): UserSession => {
   prune();
   const createdAt = nowIso();
   const sessionToken = crypto.randomUUID();
+  const user = buildDaemonOwnerUser(input.profile);
 
   upsertUserStatement.run({
     githubUserId: String(user.id),
@@ -179,12 +215,24 @@ export const createAppSession = (githubAccessToken: string, user: AppSessionUser
   });
 
   db.prepare(
-    `INSERT INTO app_sessions (session_token, github_user_id, github_access_token, created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(sessionToken, String(user.id), githubAccessToken, createdAt, new Date(Date.now() + SESSION_TTL_MS).toISOString());
+    `INSERT INTO app_sessions (session_token, github_user_id, github_access_token, auth_mode, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    sessionToken,
+    String(user.id),
+    input.githubAccessToken ?? '',
+    input.authMode,
+    createdAt,
+    new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+  );
 
   return { sessionToken, user };
 };
+
+export const createLocalAppSession = () =>
+  createAppSession({
+    authMode: 'local',
+  });
 
 export const getAppSession = (sessionToken: string | undefined) => {
   if (!sessionToken) {

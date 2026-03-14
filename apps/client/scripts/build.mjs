@@ -8,6 +8,11 @@ const root = join(__dirname, '..');
 const dist = join(root, 'dist');
 const publicDir = join(root, 'public');
 const tsconfig = join(root, 'tsconfig.build.json');
+const defaultApiUrl =
+  process.env.CLIENT_DEFAULT_API_URL?.trim() ||
+  process.env.TAILSCALE_API_URL?.trim() ||
+  process.env.PUBLIC_API_URL?.trim() ||
+  '';
 
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
@@ -46,7 +51,9 @@ writeFileSync(
 
 const indexHtml = join(dist, 'index.html');
 if (existsSync(indexHtml)) {
-  writeFileSync(join(dist, '404.html'), readFileSync(indexHtml));
+  const hydratedIndexHtml = readFileSync(indexHtml, 'utf8').replaceAll('__GPA_DEFAULT_API_URL_VALUE__', defaultApiUrl);
+  writeFileSync(indexHtml, hydratedIndexHtml);
+  writeFileSync(join(dist, '404.html'), hydratedIndexHtml);
 }
 
 console.log(`Built static client at ${dist}`);

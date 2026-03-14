@@ -1,25 +1,115 @@
 export type AppSessionUser = {
-  id: number;
+  id: string;
   login: string;
   name?: string | null;
   avatarUrl?: string;
 };
+
+export type AppAuthMode = 'local' | 'github-device' | 'github-oauth';
+export type CopilotAuthMode = 'logged-in-user' | 'github-token' | 'cli-url' | 'unconfigured';
 
 export type UserSession = {
   sessionToken: string;
   user: AppSessionUser;
 };
 
+export type AuthSignInCapabilities = {
+  label: string;
+  description: string;
+  automatic: boolean;
+  localBootstrap: boolean;
+  deviceFlow: boolean;
+  redirectFlow: boolean;
+};
+
+export type AuthCapabilities = {
+  mode: AppAuthMode;
+  supportedModes: AppAuthMode[];
+  backendHandled: boolean;
+  sessionRequired: boolean;
+  serviceTokenRequired: boolean;
+  authConfigured: boolean;
+  version: string;
+  copilotAuthMode: CopilotAuthMode;
+  signIn: AuthSignInCapabilities;
+};
+
 export type ApiHealth = {
   status: 'ok';
   copilotConfigured: boolean;
   authConfigured: boolean;
+  authMode: AppAuthMode;
+  copilotAuthMode: CopilotAuthMode;
   apiOrigin: string;
   publicApiUrl?: string;
   tailscaleApiUrl?: string;
   remoteAccessMode: 'local' | 'tailscale' | 'public';
   remoteAccessConfigured: boolean;
   ragflowConfigured: boolean;
+};
+
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
+export type CopilotModelCapabilities = {
+  supports: {
+    vision: boolean;
+    reasoningEffort: boolean;
+  };
+  limits: {
+    maxPromptTokens?: number;
+    maxContextWindowTokens: number;
+    vision?: {
+      supportedMediaTypes: string[];
+      maxPromptImages: number;
+      maxPromptImageSize: number;
+    };
+  };
+};
+
+export type CopilotModelPolicy = {
+  state: 'enabled' | 'disabled' | 'unconfigured';
+  terms: string;
+};
+
+export type CopilotModelBilling = {
+  multiplier: number;
+};
+
+export type CopilotSessionContext = {
+  cwd: string;
+  gitRoot?: string;
+  repository?: string;
+  branch?: string;
+};
+
+export type CopilotSessionSummary = {
+  sessionId: string;
+  startTime: string;
+  modifiedTime: string;
+  summary?: string;
+  isRemote: boolean;
+  context?: CopilotSessionContext;
+};
+
+export type CopilotRuntimeStatus = {
+  version: string;
+  protocolVersion: number;
+  connectionState: 'disconnected' | 'connecting' | 'connected' | 'error';
+};
+
+export type CopilotAuthStatus = {
+  isAuthenticated: boolean;
+  authType?: 'user' | 'env' | 'gh-cli' | 'hmac' | 'api-key' | 'token';
+  host?: string;
+  login?: string;
+  statusMessage?: string;
+};
+
+export type CopilotStatusResponse = {
+  status: CopilotRuntimeStatus;
+  auth: CopilotAuthStatus;
+  sessions: CopilotSessionSummary[];
+  lastSessionId?: string;
 };
 
 export type GitHubDeviceAuthStart = {
@@ -42,6 +132,11 @@ export type ModelOption = {
   source: 'sdk' | 'static';
   supportsReasoning?: boolean;
   premium?: boolean;
+  capabilities?: CopilotModelCapabilities;
+  policy?: CopilotModelPolicy;
+  billing?: CopilotModelBilling;
+  supportedReasoningEfforts?: ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
 };
 
 export type AttachmentKind = 'image' | 'document' | 'audio' | 'video' | 'other';

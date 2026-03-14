@@ -1,14 +1,15 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import type { AppSessionUser, GitHubDeviceAuthPoll } from '@github-personal-assistant/shared';
+import type { AuthCapabilities, GitHubDeviceAuthPoll } from '@github-personal-assistant/shared';
 
-import { env, isDeviceOAuthConfigured, isOAuthConfigured } from '../config';
+import { env, getAuthConfigVersion, getCopilotAuthMode, isActiveAppAuthConfigured, isDeviceOAuthConfigured, isOAuthConfigured } from '../config';
 import { getRequestSession, requireServiceAccess } from '../lib/auth';
 import {
   completeDeviceAuth,
   consumeOAuthState,
   createAppSession,
+  createLocalAppSession,
   createDeviceAuth,
   createOAuthState,
   destroyAppSession,
@@ -22,6 +23,7 @@ const router = Router();
 const GITHUB_SCOPE = 'read:user user:email';
 const DEVICE_AUTH_CONFIG_ERROR =
   'GitHub device OAuth is not configured on the backend yet. Copy .env.example to .env, set GITHUB_CLIENT_ID, and restart the API.';
+const ACTIVE_AUTH_MODE_ERROR = 'GitHub sign-in is disabled because the daemon is not using a GitHub app-auth mode right now.';
 
 const authStartSchema = z.object({
   redirectUri: z.string().url().optional(),
@@ -44,7 +46,7 @@ const deviceTokenResponseSchema = z.object({
   error_description: z.string().optional(),
 });
 
-const getGitHubUser = async (accessToken: string): Promise<AppSessionUser> => {
+const getGitHubUserProfile = async (accessToken: string) => {
   const userResponse = await fetch('https://api.github.com/user', {
     headers: {
       Accept: 'application/vnd.github+json',
@@ -65,7 +67,6 @@ const getGitHubUser = async (accessToken: string): Promise<AppSessionUser> => {
   };
 
   return {
-    id: githubUser.id,
     login: githubUser.login,
     name: githubUser.name,
     avatarUrl: githubUser.avatar_url,
@@ -73,7 +74,62 @@ const getGitHubUser = async (accessToken: string): Promise<AppSessionUser> => {
 };
 
 const createSessionFromGitHubAccessToken = async (accessToken: string) =>
-  createAppSession(accessToken, await getGitHubUser(accessToken));
+  createAppSession({
+    authMode: env.appAuthMode,
+    githubAccessToken: accessToken,
+    profile: await getGitHubUserProfile(accessToken),
+  });
+
+const buildAuthCapabilities = (): AuthCapabilities => {
+  const authConfigured = isActiveAppAuthConfigured();
+  const signIn =
+    env.appAuthMode === 'local'
+      ? {
+          label: 'Continue to local daemon',
+          description: 'This daemon is configured for trusted local access and can create a session automatically.',
+          automatic: true,
+          localBootstrap: true,
+          deviceFlow: false,
+          redirectFlow: false,
+        }
+      : env.appAuthMode === 'github-device'
+        ? {
+            label: 'Sign in with GitHub',
+            description: 'Open GitHub device verification, confirm the code, and this client will finish sign-in automatically.',
+            automatic: false,
+            localBootstrap: false,
+            deviceFlow: true,
+            redirectFlow: false,
+          }
+        : {
+            label: 'Continue with GitHub',
+            description: 'Open the backend-managed GitHub OAuth flow and return here once the daemon has created your session.',
+            automatic: false,
+            localBootstrap: false,
+            deviceFlow: false,
+            redirectFlow: true,
+          };
+
+  return {
+    mode: env.appAuthMode,
+    supportedModes: [env.appAuthMode],
+    backendHandled: true,
+    sessionRequired: true,
+    serviceTokenRequired: Boolean(env.serviceAccessToken),
+    authConfigured,
+    version: getAuthConfigVersion(),
+    copilotAuthMode: getCopilotAuthMode(),
+    signIn,
+  };
+};
+
+router.get('/api/auth/capabilities', (request, response) => {
+  if (!requireServiceAccess(request, response)) {
+    return;
+  }
+
+  response.json(buildAuthCapabilities());
+});
 
 router.get('/api/auth/session', (request, response) => {
   if (!requireServiceAccess(request, response)) {
@@ -82,6 +138,26 @@ router.get('/api/auth/session', (request, response) => {
 
   const session = getRequestSession(request);
   response.json({ session: session ? { sessionToken: session.sessionToken, user: session.user } : null });
+});
+
+router.post('/api/auth/local/session', (request, response) => {
+  if (!requireServiceAccess(request, response)) {
+    return;
+  }
+
+  if (env.appAuthMode !== 'local') {
+    response.status(409).json({ error: 'Local auth is not active on this daemon right now.' });
+    return;
+  }
+
+  const existingSession = getRequestSession(request);
+  if (existingSession) {
+    response.status(201).json({ session: { sessionToken: existingSession.sessionToken, user: existingSession.user } });
+    return;
+  }
+
+  const session = createLocalAppSession();
+  response.status(201).json({ session });
 });
 
 router.post('/api/auth/logout', (request, response) => {
@@ -96,6 +172,11 @@ router.post('/api/auth/logout', (request, response) => {
 
 router.get('/api/auth/github/url', (request, response) => {
   if (!requireServiceAccess(request, response)) {
+    return;
+  }
+
+  if (env.appAuthMode !== 'github-oauth') {
+    response.status(409).json({ error: ACTIVE_AUTH_MODE_ERROR });
     return;
   }
 
@@ -122,6 +203,11 @@ router.get('/api/auth/github/url', (request, response) => {
 
 router.post('/api/auth/github/device/start', async (_request, response) => {
   if (!requireServiceAccess(_request, response)) {
+    return;
+  }
+
+  if (env.appAuthMode !== 'github-device') {
+    response.status(409).json({ error: ACTIVE_AUTH_MODE_ERROR });
     return;
   }
 
@@ -167,6 +253,11 @@ router.post('/api/auth/github/device/start', async (_request, response) => {
 
 router.get('/api/auth/github/device/:flowId', async (request, response) => {
   if (!requireServiceAccess(request, response)) {
+    return;
+  }
+
+  if (env.appAuthMode !== 'github-device') {
+    response.status(409).json({ error: ACTIVE_AUTH_MODE_ERROR });
     return;
   }
 
@@ -267,6 +358,11 @@ router.get('/api/auth/github/device/:flowId', async (request, response) => {
 });
 
 router.get('/api/auth/github/callback', async (request, response) => {
+  if (env.appAuthMode !== 'github-oauth') {
+    response.status(409).json({ error: ACTIVE_AUTH_MODE_ERROR });
+    return;
+  }
+
   if (!isOAuthConfigured()) {
     response.status(503).json({ error: 'GitHub OAuth is not configured on the backend yet.' });
     return;

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS app_sessions (
   session_token TEXT PRIMARY KEY,
   github_user_id TEXT NOT NULL REFERENCES users(github_user_id) ON DELETE CASCADE,
   github_access_token TEXT NOT NULL,
+  auth_mode TEXT NOT NULL DEFAULT 'github-device',
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
 );
@@ -134,5 +135,14 @@ CREATE TABLE IF NOT EXISTS service_clients (
   last_seen_at TEXT
 );
 `);
+
+const ensureColumn = (table: string, column: string, alterSql: string) => {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!columns.some((entry) => entry.name === column)) {
+    db.exec(alterSql);
+  }
+};
+
+ensureColumn('app_sessions', 'auth_mode', "ALTER TABLE app_sessions ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'github-device';");
 
 export const nowIso = () => new Date().toISOString();

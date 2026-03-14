@@ -128,12 +128,14 @@ button { cursor: pointer; }
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
 }
-
+.chat-row:hover, .project-row:hover { transform: translateY(-1px); border-color: rgba(96, 165, 250, 0.28); }
 .chat-row.active { border-color: rgba(96, 165, 250, 0.45); background: rgba(30, 41, 59, 0.88); }
 .chat-title, .project-title { font-weight: 700; overflow-wrap: anywhere; }
 .chat-meta, .project-meta { font-size: 0.88rem; color: var(--muted); }
 .project-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.section-header-actions { display: flex; align-items: center; gap: 8px; }
 
 .button, .ghost-button, .danger-button {
   border: 0;
@@ -198,15 +200,17 @@ button { cursor: pointer; }
   padding: 18px 20px;
   border-bottom: 1px solid var(--border);
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
 }
 
 .main-header-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.main-header-leading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.header-copy { min-width: 0; }
 .main-subtitle { margin-top: 6px; color: var(--muted); font-size: 0.92rem; }
-.mobile-menu { display: none; }
+.mobile-menu-trigger { display: none; }
 
 .message-scroll {
   overflow: auto;
@@ -225,7 +229,7 @@ button { cursor: pointer; }
 
 .empty-state h2 { margin-bottom: 10px; }
 
-.message-row { display: flex; width: 100%; }
+.message-row { display: flex; width: 100%; animation: message-rise 220ms ease; }
 .message-row.user { justify-content: flex-end; }
 .message-row.assistant, .message-row.error { justify-content: flex-start; }
 .message-bubble {
@@ -265,7 +269,40 @@ button { cursor: pointer; }
 .composer-toolbar, .composer-footer, .draft-attachment-row, .modal-actions, .composer-tools { display: flex; gap: 10px; flex-wrap: wrap; }
 .composer-toolbar { justify-content: space-between; align-items: center; }
 .composer-tools { align-items: center; min-width: 0; }
+.composer-options {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 180ms ease;
+}
+.composer-options.open { grid-template-rows: 1fr; }
+.composer-options-inner {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .composer-select { width: auto; min-width: 170px; max-width: 240px; }
+.model-toggle {
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.72);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 9px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(44vw, 260px);
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+.model-toggle:hover { transform: translateY(-1px); border-color: rgba(96, 165, 250, 0.28); }
+.model-toggle.open { background: rgba(30, 41, 59, 0.88); border-color: rgba(96, 165, 250, 0.35); }
+.model-toggle .icon { transition: transform 160ms ease; }
+.model-toggle.open .icon { transform: rotate(180deg); }
+.model-toggle-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .draft-attachment {
   display: flex;
   align-items: center;
@@ -355,6 +392,7 @@ button { cursor: pointer; }
   display: flex;
   flex-direction: column;
   gap: 14px;
+  animation: modal-in 180ms ease;
 }
 .modal-card.narrow, .sheet-card.narrow { width: min(520px, 100%); }
 .modal-title { margin: 0; font-size: 1.15rem; font-weight: 800; }
@@ -398,7 +436,7 @@ button { cursor: pointer; }
     background: rgba(2, 6, 23, 0.6);
     z-index: 20;
   }
-  .mobile-menu, .sidebar-topbar { display: flex; }
+  .mobile-menu-trigger, .sidebar-topbar { display: flex; }
   .main-panel { min-height: calc(100dvh - 28px); }
   .main-header { padding: 16px; }
   .message-scroll, .composer { padding-left: 16px; padding-right: 16px; }
@@ -416,11 +454,10 @@ button { cursor: pointer; }
   }
 
   .main-header-actions {
-    justify-content: stretch;
+    justify-content: flex-end;
   }
 
   .main-header-actions > * {
-    flex: 1 1 180px;
     min-width: 0;
   }
 
@@ -434,5 +471,27 @@ button { cursor: pointer; }
 
   .message-bubble {
     max-width: 100%;
+  }
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes message-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

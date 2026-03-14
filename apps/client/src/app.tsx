@@ -41,12 +41,23 @@ type IOSNavigator = Navigator & {
 };
 
 const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const messageRoleRank: Record<ChatMessage['role'], number> = {
+  system: 0,
+  user: 1,
+  assistant: 2,
+  error: 2,
+};
 const sortMessages = (messages: ChatMessage[]) =>
   [...messages]
     .map((message, index) => ({ message, index }))
     .sort((left, right) => {
       const byTime = left.message.createdAt.localeCompare(right.message.createdAt);
-      return byTime !== 0 ? byTime : left.index - right.index;
+      if (byTime !== 0) {
+        return byTime;
+      }
+
+      const byRole = messageRoleRank[left.message.role] - messageRoleRank[right.message.role];
+      return byRole !== 0 ? byRole : left.index - right.index;
     })
     .map(({ message }) => message);
 const createMessage = (role: ChatMessage['role'], content: string, attachments?: AttachmentSummary[]): ChatMessage => ({
@@ -98,6 +109,33 @@ function PaperclipIcon() {
   );
 }
 
+function MenuIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 7h16" />
+      <path d="M4 12h16" />
+      <path d="M4 17h16" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
 function IconButton({
   label,
   onClick,
@@ -126,7 +164,7 @@ function IconButton({
 }
 
 export default function App() {
-  const { openPendingGitHubVerification, pendingDeviceAuth, session, signInWithGitHub, signOut, isRestoring } = useAuth();
+  const { authCapabilities, openPendingGitHubVerification, pendingDeviceAuth, session, signIn, signOut, isRestoring } = useAuth();
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
@@ -149,6 +187,7 @@ export default function App() {
   const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [isStandalone, setIsStandalone] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
+  const [composerOptionsOpen, setComposerOptionsOpen] = useState(false);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -157,6 +196,16 @@ export default function App() {
   const activeApiUrl = savedApiUrlOverride ?? suggestedApiUrl ?? getDefaultApiUrl();
   const remoteAccessLabel =
     health?.remoteAccessMode === 'tailscale' ? 'Tailscale' : health?.remoteAccessMode === 'public' ? 'Public URL' : 'Local only';
+  const activeAuthLabel =
+    authCapabilities?.mode === 'local'
+      ? 'Local daemon'
+      : authCapabilities?.mode === 'github-oauth'
+        ? 'GitHub OAuth'
+        : authCapabilities?.mode === 'github-device'
+          ? 'GitHub device flow'
+          : 'Negotiating';
+  const authDescription =
+    authCapabilities?.signIn.description ?? 'Connect this client to your personal assistant daemon and keep the full chat history on your own machine.';
 
   useEffect(() => {
     if (!session) {
@@ -165,6 +214,7 @@ export default function App() {
       setChats([]);
       setSelectedChatId(null);
       setDraft('');
+      setComposerOptionsOpen(false);
     }
   }, [session]);
 
@@ -177,6 +227,10 @@ export default function App() {
   useEffect(() => {
     void refreshConnectionState();
   }, [refreshConnectionState]);
+
+  useEffect(() => {
+    setComposerOptionsOpen(false);
+  }, [selectedChatId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -346,6 +400,8 @@ export default function App() {
 
   const selectedChat = useMemo(() => chats.find((chat) => chat.id === selectedChatId) ?? chats[0] ?? null, [chats, selectedChatId]);
   const orderedChats = useMemo(() => [...chats].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)), [chats]);
+  const activeModelId = selectedChat?.model ?? defaultModel;
+  const activeModelName = models.find((model) => model.id === activeModelId)?.name ?? activeModelId;
 
   useEffect(() => {
     messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' });
@@ -382,13 +438,12 @@ export default function App() {
       }
       await refreshConnectionState();
       setConnectionSettingsVisible(false);
-      await load();
     } catch (connectionError) {
       setError(connectionError instanceof Error ? connectionError.message : 'Unable to save the API endpoint.');
     } finally {
       setSavingConnection(false);
     }
-  }, [apiUrlInput, load, refreshConnectionState]);
+  }, [apiUrlInput, refreshConnectionState]);
 
   const handleResetConnection = useCallback(async () => {
     setSavingConnection(true);
@@ -396,21 +451,20 @@ export default function App() {
     try {
       await clearApiUrlOverride();
       await refreshConnectionState();
-      await load();
     } catch (connectionError) {
       setError(connectionError instanceof Error ? connectionError.message : 'Unable to reset the API endpoint.');
     } finally {
       setSavingConnection(false);
     }
-  }, [load, refreshConnectionState]);
+  }, [refreshConnectionState]);
 
   const handleAuthPress = useCallback(() => {
     setError(null);
-    const action = pendingDeviceAuth ? openPendingGitHubVerification() : signInWithGitHub();
+    const action = pendingDeviceAuth ? openPendingGitHubVerification() : signIn();
     void action.catch((authError) => {
-      setError(authError instanceof Error ? authError.message : 'Unable to complete GitHub sign-in.');
+      setError(authError instanceof Error ? authError.message : 'Unable to complete sign-in.');
     });
-  }, [openPendingGitHubVerification, pendingDeviceAuth, signInWithGitHub]);
+  }, [openPendingGitHubVerification, pendingDeviceAuth, signIn]);
 
   const handleCreateChat = useCallback(async () => {
     if (!session) return;
@@ -596,6 +650,7 @@ export default function App() {
 
     setDraft('');
     setError(null);
+    setComposerOptionsOpen(false);
     setStreamingChatId(chatId);
     updateChat(chatId, (chat) => ({
       ...chat,
@@ -700,21 +755,23 @@ export default function App() {
     <div className="modal-backdrop" onClick={() => setSettingsVisible(false)}>
       <div className="modal-card narrow" onClick={(event) => event.stopPropagation()}>
         <h2 className="modal-title">Settings</h2>
-        <p className="modal-copy">Signed in as @{session?.user.login}</p>
-        <div className="status-grid">
-          <div className="status-item"><div className="status-label">Daemon</div><div className="status-value">{activeApiUrl}</div></div>
-          <div className="status-item"><div className="status-label">Remote access</div><div className="status-value">{remoteAccessLabel}</div></div>
-          <div className="status-item"><div className="status-label">RagFlow</div><div className="status-value">{health?.ragflowConfigured ? 'Connected' : 'Not configured'}</div></div>
-          <div className="status-item"><div className="status-label">Auth</div><div className="status-value">{health?.authConfigured ? 'Configured' : 'Missing GitHub client ID'}</div></div>
-          <div className="status-item"><div className="status-label">Install</div><div className="status-value">{isStandalone ? 'Installed' : installPromptEvent ? 'Ready to install' : 'Browser install available'}</div></div>
-          <div className="status-item"><div className="status-label">Connectivity</div><div className="status-value"><span className="status-inline"><span className={`status-dot ${isOnline ? 'online' : 'offline'}`} />{isOnline ? 'Online' : 'Offline'}</span></div></div>
-        </div>
+          <p className="modal-copy">Signed in as @{session?.user.login}</p>
+          <div className="status-grid">
+            <div className="status-item"><div className="status-label">Daemon</div><div className="status-value">{activeApiUrl}</div></div>
+            <div className="status-item"><div className="status-label">Remote access</div><div className="status-value">{remoteAccessLabel}</div></div>
+            <div className="status-item"><div className="status-label">RagFlow</div><div className="status-value">{health?.ragflowConfigured ? 'Connected' : 'Not configured'}</div></div>
+            <div className="status-item"><div className="status-label">Auth</div><div className="status-value">{health?.authConfigured ? activeAuthLabel : 'Not configured'}</div></div>
+            <div className="status-item"><div className="status-label">Install</div><div className="status-value">{isStandalone ? 'Installed' : installPromptEvent ? 'Ready to install' : 'Browser install available'}</div></div>
+            <div className="status-item"><div className="status-label">Connectivity</div><div className="status-value"><span className="status-inline"><span className={`status-dot ${isOnline ? 'online' : 'offline'}`} />{isOnline ? 'Online' : 'Offline'}</span></div></div>
+          </div>
         {!isStandalone ? <div className="install-note">On iPhone or iPad, open the browser share menu and choose <strong>Add to Home Screen</strong>.</div> : null}
         <div className="modal-actions">
           {!isStandalone ? <button className="ghost-button install-cta" onClick={() => void handleInstallApp()}><InstallIcon />Install app</button> : null}
           <button className="ghost-button" onClick={() => { setSettingsVisible(false); openConnectionSettings(); }}>Connection</button>
           <button className="ghost-button" onClick={() => setSettingsVisible(false)}>Close</button>
-          <button className="danger-button" onClick={() => { setSettingsVisible(false); void signOut(); }}>Sign out</button>
+          <button className="danger-button" onClick={() => { setSettingsVisible(false); void signOut({ manual: true }); }}>
+            {authCapabilities?.mode === 'local' ? 'Reset local session' : 'Sign out'}
+          </button>
         </div>
       </div>
     </div>
@@ -731,18 +788,19 @@ export default function App() {
           <section className="auth-card">
             <div className="eyebrow">Github Personal Assistant</div>
             <h1>Bring your own daemon, keep your own history.</h1>
-            <p className="muted">Use GitHub device sign-in to connect this React web client to your personal assistant service.</p>
+            <p className="muted">{authDescription}</p>
 
             <div className="status-card">
               <div className="status-grid">
                 <div className="status-item"><div className="status-label">Daemon endpoint</div><div className="status-value">{activeApiUrl}</div></div>
                 <div className="status-item"><div className="status-label">Remote access</div><div className="status-value">{remoteAccessLabel}</div></div>
+                <div className="status-item"><div className="status-label">Auth mode</div><div className="status-value">{activeAuthLabel}</div></div>
                 <div className="status-item"><div className="status-label">Install</div><div className="status-value">{isStandalone ? 'Installed' : installPromptEvent ? 'Ready to install' : 'Use browser install'}</div></div>
                 <div className="status-item"><div className="status-label">Connectivity</div><div className="status-value"><span className="status-inline"><span className={`status-dot ${isOnline ? 'online' : 'offline'}`} />{isOnline ? 'Online' : 'Offline'}</span></div></div>
               </div>
             </div>
 
-            {pendingDeviceAuth ? (
+            {pendingDeviceAuth && authCapabilities?.mode === 'github-device' ? (
               <div className="device-auth-card">
                 <div className="status-label">GitHub device sign-in</div>
                 <div className="device-auth-code">{pendingDeviceAuth.userCode}</div>
@@ -756,7 +814,11 @@ export default function App() {
             {error ? <div className="error-banner">{error}</div> : null}
 
             <div className="modal-actions">
-              <button className="button" onClick={handleAuthPress}>{pendingDeviceAuth ? 'Open verification page' : 'Sign in with GitHub'}</button>
+              <button className="button" onClick={handleAuthPress}>
+                {pendingDeviceAuth && authCapabilities?.mode === 'github-device'
+                  ? 'Open verification page'
+                  : authCapabilities?.signIn.label ?? 'Continue'}
+              </button>
               <button className="ghost-button" onClick={openConnectionSettings}>Connection settings</button>
             </div>
           </section>
@@ -784,13 +846,16 @@ export default function App() {
             <div className="sidebar-subtitle">@{session.user.login}</div>
           </div>
 
-          <button className="button" onClick={() => void handleCreateChat()}>+ New chat</button>
-
           <div className="sidebar-scroll">
             <section className="section-card">
               <div className="section-header">
                 <h2 className="section-title">Chats</h2>
-                <span className="chip">{orderedChats.length}</span>
+                <div className="section-header-actions">
+                  <span className="chip">{orderedChats.length}</span>
+                  <IconButton label="Start new chat" onClick={() => void handleCreateChat()}>
+                    <PlusIcon />
+                  </IconButton>
+                </div>
               </div>
               <div className="sidebar-list">
                 {orderedChats.map((chat) => (
@@ -830,17 +895,22 @@ export default function App() {
 
         <main className="main-panel">
           <header className="main-header">
-            <div>
-              <div className="main-header-actions mobile-menu">
-                <button className="ghost-button" onClick={() => setSidebarOpen(true)}>Menu</button>
-              </div>
-              <h1 className="main-title">{selectedChat?.title ?? 'New chat'}</h1>
-              <div className="main-subtitle">
-                {selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : 'No project attached'}
-                {selectedChat?.copilotSessionId ? ' · resumable' : ''}
+            <div className="main-header-leading">
+              <IconButton label="Open chats and projects" onClick={() => setSidebarOpen(true)} className="mobile-menu-trigger">
+                <MenuIcon />
+              </IconButton>
+              <div className="header-copy">
+                <h1 className="main-title">{selectedChat?.title ?? 'New chat'}</h1>
+                <div className="main-subtitle">
+                  {selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : 'No project attached'}
+                  {selectedChat?.copilotSessionId ? ' · resumable' : ''}
+                </div>
               </div>
             </div>
             <div className="main-header-actions">
+              <IconButton label="Start new chat" onClick={() => void handleCreateChat()}>
+                <PlusIcon />
+              </IconButton>
               <IconButton label="Open settings" onClick={() => setSettingsVisible(true)}>
                 <SettingsIcon />
               </IconButton>
@@ -897,19 +967,40 @@ export default function App() {
             ) : null}
 
             <textarea className="textarea" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={selectedChat?.projectName ? `Ask about ${selectedChat.projectName}...` : 'Ask anything...'} />
+            <div className={`composer-options ${composerOptionsOpen ? 'open' : ''}`}>
+              <div className="composer-options-inner">
+                <label className="modal-label" htmlFor="composer-model">Model</label>
+                <select
+                  id="composer-model"
+                  className="select composer-select"
+                  value={activeModelId}
+                  onChange={(event) => {
+                    if (!selectedChat) {
+                      return;
+                    }
+                    updateChat(selectedChat.id, (chat) => ({ ...chat, model: event.target.value }));
+                    setComposerOptionsOpen(false);
+                  }}
+                >
+                  {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+                </select>
+              </div>
+            </div>
             <div className="composer-toolbar">
               <div className="composer-tools">
                 <IconButton label={uploadingAttachment ? 'Uploading files' : 'Add files'} onClick={handleChooseFiles} disabled={uploadingAttachment} className={uploadingAttachment ? 'is-busy' : undefined}>
                   <PaperclipIcon />
                 </IconButton>
-                <select
-                  className="select composer-select"
-                  aria-label="Choose model"
-                  value={selectedChat?.model ?? defaultModel}
-                  onChange={(event) => selectedChat && updateChat(selectedChat.id, (chat) => ({ ...chat, model: event.target.value }))}
+                <button
+                  type="button"
+                  className={`model-toggle ${composerOptionsOpen ? 'open' : ''}`}
+                  onClick={() => setComposerOptionsOpen((open) => !open)}
+                  aria-expanded={composerOptionsOpen}
+                  aria-controls="composer-model"
                 >
-                  {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-                </select>
+                  <span className="model-toggle-label">{activeModelName}</span>
+                  <ChevronDownIcon />
+                </button>
               </div>
               <button className="button" onClick={() => void handleSend()} disabled={Boolean(streamingChatId) || !draft.trim()}>
                 {streamingChatId ? 'Streaming...' : 'Send'}

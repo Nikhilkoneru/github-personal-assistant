@@ -1,5 +1,6 @@
 import type {
   AttachmentSummary,
+  AuthCapabilities,
   ApiHealth,
   ChatStreamInput,
   ChatStreamEvent,
@@ -70,22 +71,27 @@ const notifyUnauthorized = () => {
   void unauthorizedHandler?.();
 };
 
-const buildHeaders = (sessionToken?: string, extraHeaders?: HeadersInit) => ({
-  ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-  ...(extraHeaders ?? {}),
-});
+const buildHeaders = (sessionToken?: string, extraHeaders?: HeadersInit) => {
+  const headers = new Headers(extraHeaders);
+  if (sessionToken) {
+    headers.set('Authorization', `Bearer ${sessionToken}`);
+  }
+  return headers;
+};
 
 export const fetchJson = async <T>(path: string, options?: RequestInit, sessionToken?: string): Promise<T> => {
   let response: Response;
   const url = await buildUrl(path);
+  const headers = buildHeaders(sessionToken, options?.headers);
+
+  if (options?.body !== undefined && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
 
   try {
     response = await fetch(url, {
       ...options,
-      headers: buildHeaders(sessionToken, {
-        'Content-Type': 'application/json',
-        ...(options?.headers ?? {}),
-      }),
+      headers,
     });
   } catch (error) {
     throw new Error(parseNetworkError(error, url));
@@ -107,6 +113,7 @@ export const fetchJson = async <T>(path: string, options?: RequestInit, sessionT
 };
 
 export const getHealth = () => fetchJson<ApiHealth>('/api/health');
+export const getAuthCapabilities = () => fetchJson<AuthCapabilities>('/api/auth/capabilities');
 export const getProjects = (sessionToken?: string) => fetchJson<{ projects: ProjectSummary[] }>('/api/projects', undefined, sessionToken);
 export const getProject = (projectId: string, sessionToken?: string) =>
   fetchJson<{ project: ProjectDetail }>(`/api/projects/${projectId}`, undefined, sessionToken);
@@ -138,6 +145,7 @@ export const createThread = (payload: CreateThreadInput, sessionToken?: string) 
   );
 export const getModels = (sessionToken?: string) => fetchJson<{ models: ModelOption[] }>('/api/models', undefined, sessionToken);
 export const getSession = (sessionToken: string) => fetchJson<{ session: UserSession | null }>('/api/auth/session', undefined, sessionToken);
+export const bootstrapLocalSession = () => fetchJson<{ session: UserSession }>('/api/auth/local/session', { method: 'POST' });
 export const logout = (sessionToken: string) =>
   fetchJson<void>(
     '/api/auth/logout',
@@ -149,6 +157,8 @@ export const logout = (sessionToken: string) =>
 export const startGitHubDeviceAuth = () => fetchJson<GitHubDeviceAuthStart>('/api/auth/github/device/start', { method: 'POST' });
 export const pollGitHubDeviceAuth = (flowId: string) =>
   fetchJson<GitHubDeviceAuthPoll>(`/api/auth/github/device/${encodeURIComponent(flowId)}`);
+export const getGitHubAuthorizeUrl = (redirectUri: string) =>
+  fetchJson<{ authorizeUrl: string }>(`/api/auth/github/url?redirectUri=${encodeURIComponent(redirectUri)}`);
 
 type UploadableAttachment = {
   name: string;

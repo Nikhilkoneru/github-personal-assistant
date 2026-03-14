@@ -900,7 +900,6 @@ export default function App() {
 
           <div className="sidebar-header">
             <h1>Github Personal Assistant</h1>
-            <div className="sidebar-subtitle">@{session.user.login}</div>
           </div>
 
           <div className="sidebar-scroll">
@@ -918,7 +917,7 @@ export default function App() {
                 {orderedChats.map((chat) => (
                   <button key={chat.id} className={`chat-row ${chat.id === selectedChat?.id ? 'active' : ''}`} onClick={() => void handleSelectChat(chat.id)}>
                     <span className="chat-title">{chat.title}</span>
-                    <span className="chat-meta">{chat.projectName ?? chat.lastMessagePreview ?? 'General chat'}</span>
+                    <span className="chat-meta">{chat.projectName ?? chat.lastMessagePreview ?? 'General'}</span>
                   </button>
                 ))}
               </div>
@@ -927,7 +926,7 @@ export default function App() {
             <section className="section-card">
               <div className="section-header">
                 <h2 className="section-title">Projects</h2>
-                <span className="chip">Knowledge scoped</span>
+                <span className="chip">{projects.length}</span>
               </div>
               <div className="inline-form">
                 <input className="input" placeholder="Create a project" value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} />
@@ -939,9 +938,9 @@ export default function App() {
                 {projects.map((project) => (
                   <div key={project.id} className="project-row">
                     <div className="project-title">{project.name}</div>
-                    <div className="project-meta">Default model: {project.defaultModel}</div>
+                    <div className="project-meta">Model: {project.defaultModel}</div>
                     <div className="project-actions">
-                      <button className="ghost-button" onClick={() => void handleStartProjectChat(project)}>Start project chat</button>
+                      <button className="text-button" onClick={() => void handleStartProjectChat(project)}>Open chat</button>
                     </div>
                   </div>
                 ))}

@@ -5,7 +5,6 @@
   "scripts": {
     "dev:client": "pnpm --filter client start",
     "dev:client:web": "pnpm --filter client web",
-    "dev:android": "pnpm --filter client android",
     "dev:api": "pnpm --filter api dev",
     "build:web": "pnpm --filter client export:web",
     "build": "pnpm -r --if-present build",

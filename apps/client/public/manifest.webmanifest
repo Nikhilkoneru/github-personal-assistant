@@ -1,0 +1,9 @@
+{
+  "name": "Github Personal Assistant",
+  "short_name": "Assistant",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "description": "Connect a hosted React frontend to your own GitHub assistant daemon."
+}

@@ -1,11 +1,9 @@
-import * as WebBrowser from 'expo-web-browser';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { Platform } from 'react-native';
 
 import type { GitHubDeviceAuthStart, UserSession } from '@github-personal-assistant/shared';
 
-import { getSession, logout, pollGitHubDeviceAuth, registerUnauthorizedHandler, startGitHubDeviceAuth } from '@/lib/api';
-import { tokenStorage } from '@/lib/token-storage';
+import { getSession, logout, pollGitHubDeviceAuth, registerUnauthorizedHandler, startGitHubDeviceAuth } from '../lib/api';
+import { tokenStorage } from '../lib/token-storage';
 
 type AuthContextValue = {
   isRestoring: boolean;
@@ -17,7 +15,6 @@ type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -33,10 +30,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     registerUnauthorizedHandler(() => clearLocalSession());
-
-    return () => {
-      registerUnauthorizedHandler(null);
-    };
+    return () => registerUnauthorizedHandler(null);
   }, [clearLocalSession]);
 
   useEffect(() => {
@@ -45,21 +39,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const restore = async () => {
       try {
         const token = await tokenStorage.get();
-        if (!token) return;
+        if (!token) {
+          return;
+        }
+
         try {
           const payload = await getSession(token);
-          if (!isMounted) return;
+          if (!isMounted) {
+            return;
+          }
           if (payload.session) {
             setSession(payload.session);
           } else {
             await clearLocalSession();
           }
         } catch (error) {
-          if (!isMounted) return;
+          if (!isMounted) {
+            return;
+          }
           if (error instanceof Error && /unavailable right now/i.test(error.message)) {
             return;
           }
-
           await clearLocalSession();
         }
       } finally {
@@ -69,8 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    restore();
-
+    void restore();
     return () => {
       isMounted = false;
     };
@@ -78,12 +77,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const openDeviceVerification = useCallback(async (deviceAuth: GitHubDeviceAuthStart) => {
     const targetUrl = deviceAuth.verificationUriComplete ?? deviceAuth.verificationUri;
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.open(targetUrl, '_blank', 'noopener,noreferrer');
-      return;
-    }
-
-    await WebBrowser.openBrowserAsync(targetUrl);
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
   }, []);
 
   const signInWithGitHub = useCallback(async () => {
@@ -146,14 +140,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [clearLocalSession, session]);
 
   const value = useMemo<AuthContextValue>(
-    () => ({
-      isRestoring,
-      session,
-      pendingDeviceAuth,
-      signInWithGitHub,
-      openPendingGitHubVerification,
-      signOut,
-    }),
+    () => ({ isRestoring, session, pendingDeviceAuth, signInWithGitHub, openPendingGitHubVerification, signOut }),
     [isRestoring, openPendingGitHubVerification, pendingDeviceAuth, session, signInWithGitHub, signOut],
   );
 

@@ -16,8 +16,6 @@ import type {
 
 import { resolveApiUrl } from './api-config';
 
-const SERVICE_ACCESS_TOKEN = process.env.EXPO_PUBLIC_SERVICE_ACCESS_TOKEN;
-
 const buildUrl = async (path: string) => `${await resolveApiUrl()}${path}`;
 
 const parseErrorMessage = (raw: string, status: number) => {
@@ -60,7 +58,6 @@ const notifyUnauthorized = () => {
 };
 
 const buildHeaders = (sessionToken?: string, extraHeaders?: HeadersInit) => ({
-  ...(SERVICE_ACCESS_TOKEN ? { 'X-Service-Access-Token': SERVICE_ACCESS_TOKEN } : {}),
   ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
   ...(extraHeaders ?? {}),
 });
@@ -96,13 +93,9 @@ export const fetchJson = async <T>(path: string, options?: RequestInit, sessionT
 };
 
 export const getHealth = () => fetchJson<ApiHealth>('/api/health');
-
-export const getProjects = (sessionToken?: string) =>
-  fetchJson<{ projects: ProjectSummary[] }>('/api/projects', undefined, sessionToken);
-
+export const getProjects = (sessionToken?: string) => fetchJson<{ projects: ProjectSummary[] }>('/api/projects', undefined, sessionToken);
 export const getProject = (projectId: string, sessionToken?: string) =>
   fetchJson<{ project: ProjectDetail }>(`/api/projects/${projectId}`, undefined, sessionToken);
-
 export const createProject = (payload: { name: string; description?: string }, sessionToken?: string) =>
   fetchJson<{ project: ProjectDetail }>(
     '/api/projects',
@@ -112,17 +105,14 @@ export const createProject = (payload: { name: string; description?: string }, s
     },
     sessionToken,
   );
-
 export const getThreads = (sessionToken?: string, projectId?: string) =>
   fetchJson<{ threads: ThreadSummary[] }>(
     projectId ? `/api/threads?projectId=${encodeURIComponent(projectId)}` : '/api/threads',
     undefined,
     sessionToken,
   );
-
 export const getThread = (threadId: string, sessionToken?: string) =>
   fetchJson<{ thread: ThreadDetail }>(`/api/threads/${threadId}`, undefined, sessionToken);
-
 export const createThread = (payload: CreateThreadInput, sessionToken?: string) =>
   fetchJson<{ thread: ThreadSummary }>(
     '/api/threads',
@@ -132,13 +122,8 @@ export const createThread = (payload: CreateThreadInput, sessionToken?: string) 
     },
     sessionToken,
   );
-
-export const getModels = (sessionToken?: string) =>
-  fetchJson<{ models: ModelOption[] }>('/api/models', undefined, sessionToken);
-
-export const getSession = (sessionToken: string) =>
-  fetchJson<{ session: UserSession | null }>('/api/auth/session', undefined, sessionToken);
-
+export const getModels = (sessionToken?: string) => fetchJson<{ models: ModelOption[] }>('/api/models', undefined, sessionToken);
+export const getSession = (sessionToken: string) => fetchJson<{ session: UserSession | null }>('/api/auth/session', undefined, sessionToken);
 export const logout = (sessionToken: string) =>
   fetchJson<void>(
     '/api/auth/logout',
@@ -147,20 +132,14 @@ export const logout = (sessionToken: string) =>
     },
     sessionToken,
   );
-
-export const startGitHubDeviceAuth = () =>
-  fetchJson<GitHubDeviceAuthStart>('/api/auth/github/device/start', {
-    method: 'POST',
-  });
-
+export const startGitHubDeviceAuth = () => fetchJson<GitHubDeviceAuthStart>('/api/auth/github/device/start', { method: 'POST' });
 export const pollGitHubDeviceAuth = (flowId: string) =>
   fetchJson<GitHubDeviceAuthPoll>(`/api/auth/github/device/${encodeURIComponent(flowId)}`);
 
 type UploadableAttachment = {
-  uri: string;
   name: string;
   mimeType?: string;
-  file?: File;
+  file: File;
 };
 
 export const uploadAttachment = async (
@@ -169,16 +148,7 @@ export const uploadAttachment = async (
   options?: { threadId?: string; projectId?: string },
 ) => {
   const body = new FormData();
-
-  if (attachment.file) {
-    body.append('file', attachment.file, attachment.name);
-  } else {
-    body.append('file', {
-      uri: attachment.uri,
-      name: attachment.name,
-      type: attachment.mimeType ?? 'application/octet-stream',
-    } as unknown as Blob);
-  }
+  body.append('file', attachment.file, attachment.name);
 
   if (options?.threadId) {
     body.append('threadId', options.threadId);
@@ -267,13 +237,15 @@ export async function streamChat(
     while (boundary >= 0) {
       const rawEvent = buffer.slice(0, boundary);
       buffer = buffer.slice(boundary + 2);
+
       const dataLine = rawEvent
         .split('\n')
-        .map((line) => line.trim())
-        .find((line) => line.startsWith('data: '));
+        .find((line) => line.startsWith('data:'))
+        ?.slice(5)
+        .trim();
 
       if (dataLine) {
-        onEvent(JSON.parse(dataLine.slice(6)) as ChatStreamEvent);
+        onEvent(JSON.parse(dataLine) as ChatStreamEvent);
       }
 
       boundary = buffer.indexOf('\n\n');

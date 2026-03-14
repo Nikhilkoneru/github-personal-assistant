@@ -115,12 +115,11 @@ router.post('/api/chat/stream', async (request, response) => {
   let unsubscribeDelta: (() => void) | null = null;
   let unsubscribeMessage: (() => void) | null = null;
   let streamedContent = '';
-
-  const assistantMessageId = createMessage(thread.id, 'assistant', '');
+  let assistantMessageId: string | null = null;
 
   try {
     const historicalThread = getThreadDetail(ownerId, thread.id);
-    const priorMessages = historicalThread ? historicalThread.messages.filter((message) => message.id !== assistantMessageId) : [];
+    const priorMessages = historicalThread ? historicalThread.messages : [];
     const attachmentInputs = parsed.data.attachments && parsed.data.attachments.length > 0 ? await getAttachmentInputs(ownerId, parsed.data.attachments) : [];
 
     if (parsed.data.attachments && !attachmentInputs) {
@@ -168,6 +167,8 @@ router.post('/api/chat/stream', async (request, response) => {
       linkMessageAttachments(userMessageId, parsed.data.attachments);
     }
 
+    assistantMessageId = createMessage(thread.id, 'assistant', '');
+
     renameThreadIfPlaceholder(thread.id, summarizeTitle(parsed.data.prompt));
 
     const model = parsed.data.model ?? thread.model ?? project?.defaultModel ?? env.defaultModel;
@@ -192,6 +193,9 @@ router.post('/api/chat/stream', async (request, response) => {
       }
 
       streamedContent += delta;
+      if (!assistantMessageId) {
+        return;
+      }
       updateMessage(assistantMessageId, { content: streamedContent });
       writeEvent(response, { type: 'chunk', delta });
     });
@@ -207,6 +211,9 @@ router.post('/api/chat/stream', async (request, response) => {
       }
 
       streamedContent = content;
+      if (!assistantMessageId) {
+        return;
+      }
       updateMessage(assistantMessageId, { content });
     });
 
@@ -215,7 +222,9 @@ router.post('/api/chat/stream', async (request, response) => {
     writeEvent(response, { type: 'done' });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown streaming error.';
-    updateMessage(assistantMessageId, { content: message, role: 'error' });
+    if (assistantMessageId) {
+      updateMessage(assistantMessageId, { content: message, role: 'error' });
+    }
     writeEvent(response, { type: 'error', message });
   } finally {
     unsubscribeDelta?.();

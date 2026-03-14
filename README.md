@@ -1,10 +1,10 @@
 # Github Personal Assistant
 
-Mac-hosted personal developer assistant with an Expo client, a Node API, durable chat persistence, and optional RagFlow-backed project knowledge.
+Mac-hosted personal developer assistant with a React web client, a Node API, durable chat persistence, and optional RagFlow-backed project knowledge.
 
 ## Workspace
 
-- `apps/client` — Expo app for web and Android
+- `apps/client` — static React web client and PWA shell
 - `apps/api` — Express + TypeScript API with SQLite persistence, GitHub OAuth, Copilot SDK chat streaming, and RagFlow integration hooks
 - `packages/shared` — shared API and app types
 
@@ -51,17 +51,13 @@ EXPO_PUBLIC_SERVICE_ACCESS_TOKEN=
 pnpm dev:api
 ```
 
-5. Start the Expo app:
+5. Start the web client:
 
 ```bash
 pnpm dev:client:web
 ```
 
-For Android development, use:
-
-```bash
-pnpm dev:android
-```
+This starts a small local static dev server that rebuilds the client when files change.
 
 ## Current capabilities
 
@@ -80,18 +76,18 @@ pnpm dev:android
 
 - For real Copilot sessions, provide either `COPILOT_CLI_URL` or `COPILOT_GITHUB_TOKEN`.
 - For GitHub device-flow sign-in, set `GITHUB_CLIENT_ID`. The secret and callback URL are only required if you also want the redirect-based OAuth flow.
-- `SERVICE_ACCESS_TOKEN` is an optional backend gate for client requests; if you set it, also set `EXPO_PUBLIC_SERVICE_ACCESS_TOKEN` in the Expo client environment.
+- `SERVICE_ACCESS_TOKEN` is an optional backend gate for client requests, but for hosted frontends the preferred long-term model is user auth and device pairing instead of a shared frontend secret.
 - `TAILSCALE_API_URL` is the preferred static remote URL for this setup. Example: `http://your-mac.tailnet-name.ts.net:4000`.
 - `REMOTE_ACCESS_MODE` controls how the daemon advertises itself in `/api/health` (`local`, `tailscale`, or `public`).
 - `PUBLIC_API_URL` still works for other tunnel/reverse-proxy setups, but Tailscale is now the intended remote path.
 - PDF preprocessing still preserves page-level text and OCR output locally, but RagFlow is now the intended reusable knowledge path.
 
-The client now supports a runtime API endpoint override in the connection settings screen, so you can point an already-built web/iOS/Android client at `localhost`, a LAN IP, or your Tailscale hostname without rebuilding Expo.
+The client supports a runtime API endpoint override in the connection settings screen, so you can point an already-built web frontend at `localhost`, a LAN IP, or your Tailscale hostname without rebuilding.
 
 For direct Tailscale access, either run the API with `HOST=0.0.0.0` and use `http://your-mac.tailnet-name.ts.net:4000`, or keep the API bound locally and front it with `tailscale serve` for a stable HTTPS URL.
 
 ## GitHub Pages frontend
 
-The Expo web client can now be exported statically and deployed to GitHub Pages. The included workflow in `.github/workflows/deploy-pages.yml` builds `apps/client` and publishes it to Pages on every push to `main`.
+The React web client is exported statically and deployed to GitHub Pages. The included workflow in `.github/workflows/deploy-pages.yml` builds `apps/client` and publishes it to Pages on every push to `main`.
 
 For hosted frontends, each user should open the app's connection settings and paste their own daemon URL. For Tailscale-backed setups, prefer an HTTPS URL exposed through `tailscale serve`, for example `https://your-mac.tailnet.ts.net`.

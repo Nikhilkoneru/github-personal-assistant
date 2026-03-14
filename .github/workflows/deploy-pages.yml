@@ -44,16 +44,6 @@ jobs:
         id: pages
         uses: actions/configure-pages@v5
 
-      - name: Compute web base path
-        run: |
-          repo="${GITHUB_REPOSITORY#*/}"
-          owner="${GITHUB_REPOSITORY%/*}"
-          if [ "$repo" = "${owner}.github.io" ]; then
-            echo "EXPO_PUBLIC_WEB_BASE_PATH=" >> "$GITHUB_ENV"
-          else
-            echo "EXPO_PUBLIC_WEB_BASE_PATH=/$repo" >> "$GITHUB_ENV"
-          fi
-
       - name: Export web app
         working-directory: apps/client
         run: pnpm export:web

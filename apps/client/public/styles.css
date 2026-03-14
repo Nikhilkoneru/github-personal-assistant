@@ -592,6 +592,7 @@ button { cursor: pointer; }
 
 .composer-input {
   flex: 1;
+  min-width: 0;
   border: none;
   background: transparent;
   color: var(--text);
@@ -756,6 +757,7 @@ button { cursor: pointer; }
   background: var(--surface);
   color: var(--text);
   padding: 8px 10px;
+  font-size: 0.88rem;
   min-height: 80px;
   resize: vertical;
 }
@@ -961,6 +963,16 @@ button { cursor: pointer; }
     flex: 1;
     max-width: none;
     min-width: 120px;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .composer-input,
+  .input,
+  .select,
+  .textarea,
+  .sidebar-create-input {
+    font-size: 16px;
   }
 }
 

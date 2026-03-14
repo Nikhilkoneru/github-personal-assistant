@@ -17,6 +17,13 @@ import type {
 import { resolveApiUrl } from './api-config.js';
 
 const buildUrl = async (path: string) => `${await resolveApiUrl()}${path}`;
+const summarizeOrigin = (url: string) => {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
+};
 
 const parseErrorMessage = (raw: string, status: number) => {
   if (!raw) {
@@ -35,16 +42,22 @@ const parseErrorMessage = (raw: string, status: number) => {
   return raw;
 };
 
-const parseNetworkError = (error: unknown) => {
+const parseNetworkError = (error: unknown, url: string) => {
+  const origin = summarizeOrigin(url);
+  const reachabilityHint =
+    origin.includes('.ts.net')
+      ? `The browser could not reach ${origin}. If you are using a Tailscale URL, this device/browser must be connected to the same tailnet.`
+      : `The browser could not reach ${origin}. Check that the daemon is running and reachable from this device.`;
+
   if (error instanceof Error) {
-    if (error.message === 'Failed to fetch') {
-      return 'The API is unavailable right now. Start the backend and try again.';
+    if (error.message === 'Failed to fetch' || error.message === 'Load failed' || /networkerror/i.test(error.message)) {
+      return reachabilityHint;
     }
 
     return error.message;
   }
 
-  return 'The API is unavailable right now. Start the backend and try again.';
+  return reachabilityHint;
 };
 
 let unauthorizedHandler: (() => void | Promise<void>) | null = null;
@@ -64,9 +77,10 @@ const buildHeaders = (sessionToken?: string, extraHeaders?: HeadersInit) => ({
 
 export const fetchJson = async <T>(path: string, options?: RequestInit, sessionToken?: string): Promise<T> => {
   let response: Response;
+  const url = await buildUrl(path);
 
   try {
-    response = await fetch(await buildUrl(path), {
+    response = await fetch(url, {
       ...options,
       headers: buildHeaders(sessionToken, {
         'Content-Type': 'application/json',
@@ -74,7 +88,7 @@ export const fetchJson = async <T>(path: string, options?: RequestInit, sessionT
       }),
     });
   } catch (error) {
-    throw new Error(parseNetworkError(error));
+    throw new Error(parseNetworkError(error, url));
   }
 
   if (!response.ok) {
@@ -148,6 +162,7 @@ export const uploadAttachment = async (
   options?: { threadId?: string; projectId?: string },
 ) => {
   const body = new FormData();
+  const url = await buildUrl('/api/attachments');
   body.append('file', attachment.file, attachment.name);
 
   if (options?.threadId) {
@@ -161,13 +176,13 @@ export const uploadAttachment = async (
   let response: Response;
 
   try {
-    response = await fetch(await buildUrl('/api/attachments'), {
+    response = await fetch(url, {
       method: 'POST',
       headers: buildHeaders(sessionToken),
       body,
     });
   } catch (error) {
-    throw new Error(parseNetworkError(error));
+    throw new Error(parseNetworkError(error, url));
   }
 
   if (!response.ok) {
@@ -197,9 +212,10 @@ export async function streamChat(
   onEvent: (event: ChatStreamEvent) => void,
 ) {
   let response: Response;
+  const url = await buildUrl('/api/chat/stream');
 
   try {
-    response = await fetch(await buildUrl('/api/chat/stream'), {
+    response = await fetch(url, {
       method: 'POST',
       headers: buildHeaders(sessionToken, {
         'Content-Type': 'application/json',
@@ -207,7 +223,7 @@ export async function streamChat(
       body: JSON.stringify(input),
     });
   } catch (error) {
-    throw new Error(parseNetworkError(error));
+    throw new Error(parseNetworkError(error, url));
   }
 
   if (!response.ok) {

@@ -683,6 +683,7 @@ export default function App() {
         <input id="daemon-url" className="input" value={apiUrlInput} onChange={(event) => setApiUrlInput(event.target.value)} />
         <div className="helper-text">Default: {getDefaultApiUrl()}</div>
         <div className="helper-text">Tailscale example: https://your-mac.tailnet.ts.net</div>
+        <div className="helper-text">If you use a `.ts.net` URL, this browser device also needs to be connected to your Tailscale tailnet.</div>
         {suggestedApiUrl ? <div className="helper-text">Suggested by daemon: {suggestedApiUrl}</div> : null}
         {savedApiUrlOverride ? <div className="helper-text">Saved override active</div> : null}
         <div className="modal-actions">

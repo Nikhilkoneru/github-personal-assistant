@@ -1,4 +1,4 @@
-import type { ChatMessage } from '@github-personal-assistant/shared';
+import type { ChatMessage, ChatToolActivity } from '@github-personal-assistant/shared';
 
 type MessageBubbleProps = {
   message: ChatMessage;
@@ -6,6 +6,32 @@ type MessageBubbleProps = {
 };
 
 const formatTime = (value: string) => new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+const toolStatusLabels = {
+  running: 'Running',
+  completed: 'Completed',
+  failed: 'Failed',
+} satisfies Record<ChatToolActivity['status'], string>;
+
+const formatToolPayload = (value?: string) => {
+  if (!value) return undefined;
+
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return trimmed;
+  }
+};
+
+const summarizeToolActivity = (activity: ChatToolActivity) => {
+  if (activity.error) return activity.error;
+  if (activity.additionalContext) return activity.additionalContext;
+  if (activity.result) return activity.result.trim().split('\n')[0];
+  if (activity.arguments) return formatToolPayload(activity.arguments)?.split('\n')[0];
+  return toolStatusLabels[activity.status];
+};
 
 export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
   const isUser = message.role === 'user';
@@ -16,7 +42,9 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
   const reasoningState = message.metadata?.reasoningState as 'streaming' | 'complete' | undefined;
   const isThinking = reasoningState === 'streaming';
   const hasReasoning = Boolean(message.metadata?.reasoning);
-  const toolActivities = message.metadata?.toolActivities;
+  const toolActivities = [...(message.metadata?.toolActivities ?? [])].sort(
+    (left, right) => new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime(),
+  );
   const usage = message.metadata?.usage;
 
   const usageParts: string[] = [];
@@ -60,13 +88,57 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
 
         {message.content ? <div className="msg-content">{message.content}</div> : null}
 
-        {toolActivities?.length ? (
-          <div className="tool-chips">
+        {toolActivities.length ? (
+          <div className="tool-activity-list">
             {toolActivities.map((activity) => (
-              <span key={activity.id} className={`tool-chip tool-chip--${activity.status}`}>
-                {activity.toolName}
-                {activity.status === 'running' ? <span className="tool-chip-dot" /> : null}
-              </span>
+              <section key={activity.id} className={`tool-activity tool-activity--${activity.status}`}>
+                <div className="tool-activity-header">
+                  <div className="tool-activity-title-row">
+                    <span className={`tool-activity-indicator tool-activity-indicator--${activity.status}`} aria-hidden="true" />
+                    <span className="tool-activity-name">{activity.toolName}</span>
+                    <span className={`tool-activity-badge tool-activity-badge--${activity.status}`}>{toolStatusLabels[activity.status]}</span>
+                  </div>
+                  <time className="tool-activity-time">{formatTime(activity.updatedAt)}</time>
+                </div>
+
+                <div className="tool-activity-summary">{summarizeToolActivity(activity)}</div>
+
+                {activity.permissionDecision || activity.permissionDecisionReason || activity.suppressed ? (
+                  <div className="tool-activity-note">
+                    {activity.permissionDecision ? `Permission: ${activity.permissionDecision}` : 'Permission update'}
+                    {activity.permissionDecisionReason ? ` - ${activity.permissionDecisionReason}` : ''}
+                    {activity.suppressed ? ' - hidden from assistant output' : ''}
+                  </div>
+                ) : null}
+
+                {activity.arguments ? (
+                  <div className="tool-activity-section">
+                    <div className="tool-activity-label">Arguments</div>
+                    <pre className="tool-activity-payload">{formatToolPayload(activity.arguments)}</pre>
+                  </div>
+                ) : null}
+
+                {activity.additionalContext ? (
+                  <div className="tool-activity-section">
+                    <div className="tool-activity-label">Progress</div>
+                    <div className="tool-activity-text">{activity.additionalContext}</div>
+                  </div>
+                ) : null}
+
+                {activity.result ? (
+                  <div className="tool-activity-section">
+                    <div className="tool-activity-label">Result</div>
+                    <pre className="tool-activity-payload">{formatToolPayload(activity.result)}</pre>
+                  </div>
+                ) : null}
+
+                {activity.error ? (
+                  <div className="tool-activity-section">
+                    <div className="tool-activity-label">Error</div>
+                    <div className="tool-activity-text tool-activity-text--error">{activity.error}</div>
+                  </div>
+                ) : null}
+              </section>
             ))}
           </div>
         ) : null}

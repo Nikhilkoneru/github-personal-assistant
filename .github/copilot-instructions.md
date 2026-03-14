@@ -27,6 +27,8 @@ After every code change, always complete these steps:
 
 - Runs on port 4000 (from `.env`)
 - Must bind to `0.0.0.0` (not `127.0.0.1`) for Tailscale access: `HOST=0.0.0.0`
+- Must use `--experimental-specifier-resolution=node` flag because the copilot-sdk is ESM but its dep vscode-jsonrpc lacks an exports map
+- Start command: `HOST=0.0.0.0 node --experimental-specifier-resolution=node apps/api/dist/index.js`
 - Tailscale IP for this machine: check `tailscale status`
 
 ## Client / PWA

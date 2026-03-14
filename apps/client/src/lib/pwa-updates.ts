@@ -1,5 +1,9 @@
 let isReloadingForUpdate = false;
 
+type GpaWindow = Window & {
+  __GPA_BUILD_VERSION__?: string;
+};
+
 const reloadForFreshShell = () => {
   if (typeof window === 'undefined' || isReloadingForUpdate) {
     return;
@@ -14,6 +18,9 @@ export const registerPwaServiceWorker = () => {
     return;
   }
 
+  const buildVersion = (window as GpaWindow).__GPA_BUILD_VERSION__?.trim() || 'dev';
+  const registrationUrl = `./service-worker.js?v=${encodeURIComponent(buildVersion)}`;
+
   navigator.serviceWorker.addEventListener('controllerchange', reloadForFreshShell);
   navigator.serviceWorker.addEventListener('message', (event) => {
     if (event.data?.type === 'FORCE_RELOAD') {
@@ -22,6 +29,6 @@ export const registerPwaServiceWorker = () => {
   });
 
   window.addEventListener('load', () => {
-    void navigator.serviceWorker.register('./service-worker.js').catch(() => undefined);
+    void navigator.serviceWorker.register(registrationUrl, { updateViaCache: 'none' }).catch(() => undefined);
   });
 };

@@ -65,7 +65,9 @@ writeFileSync(
 
 const indexHtml = join(dist, 'index.html');
 if (existsSync(indexHtml)) {
-  const hydratedIndexHtml = readFileSync(indexHtml, 'utf8').replaceAll('__GPA_DEFAULT_API_URL_VALUE__', defaultApiUrl);
+  const hydratedIndexHtml = readFileSync(indexHtml, 'utf8')
+    .replaceAll('__GPA_DEFAULT_API_URL_VALUE__', defaultApiUrl)
+    .replaceAll('__GPA_BUILD_VERSION_VALUE__', cacheVersion);
   writeFileSync(indexHtml, hydratedIndexHtml);
   writeFileSync(join(dist, '404.html'), hydratedIndexHtml);
 }

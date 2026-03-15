@@ -10,5 +10,10 @@
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "pnpm -r --if-present lint"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "vscode-jsonrpc@8.2.1": "patches/vscode-jsonrpc@8.2.1.patch"
+    }
   }
 }

@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  vscode-jsonrpc@8.2.1:
+    hash: 6m5x7ctwdwtqcnc32rbjcmy5pq
+    path: patches/vscode-jsonrpc@8.2.1.patch
+
 importers:
 
   .: {}
@@ -860,7 +865,7 @@ snapshots:
   '@github/copilot-sdk@0.1.32':
     dependencies:
       '@github/copilot': 1.0.5
-      vscode-jsonrpc: 8.2.1
+      vscode-jsonrpc: 8.2.1(patch_hash=6m5x7ctwdwtqcnc32rbjcmy5pq)
       zod: 4.3.6
 
   '@github/copilot-win32-arm64@1.0.5':
@@ -1391,7 +1396,7 @@ snapshots:
 
   vary@1.1.2: {}
 
-  vscode-jsonrpc@8.2.1: {}
+  vscode-jsonrpc@8.2.1(patch_hash=6m5x7ctwdwtqcnc32rbjcmy5pq): {}
 
   zod@3.25.76: {}
 

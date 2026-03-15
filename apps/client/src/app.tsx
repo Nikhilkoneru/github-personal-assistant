@@ -806,7 +806,7 @@ export default function App() {
     }
 
     const prompt = draft.trim();
-    const assistantMessageId = createId();
+    let assistantMessageId = createId();
     const chatId = selectedChat.id;
     const model = selectedChat.model || defaultModel;
     const reasoningEffort = selectedChat.reasoningEffort;
@@ -814,11 +814,30 @@ export default function App() {
     let pendingDelta = '';
     let pendingReasoningDelta = '';
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    let splitAssistantMessageOnNextText = false;
+
+    const ensureStreamingAssistantMessage = () => {
+      if (!splitAssistantMessageOnNextText) {
+        return;
+      }
+
+      assistantMessageId = createId();
+      splitAssistantMessageOnNextText = false;
+      updateChat(chatId, (chat) => ({
+        ...chat,
+        updatedAt: new Date().toISOString(),
+        messages: sortMessages([
+          ...chat.messages,
+          { id: assistantMessageId, role: 'assistant', content: '', createdAt: new Date().toISOString(), metadata: {} },
+        ]),
+      }));
+    };
 
     const flushPendingDelta = () => {
       if (!pendingDelta && !pendingReasoningDelta) {
         return;
       }
+      ensureStreamingAssistantMessage();
       const nextDelta = pendingDelta;
       const nextReasoningDelta = pendingReasoningDelta;
       pendingDelta = '';
@@ -906,6 +925,7 @@ export default function App() {
               flushTimer = null;
             }
             flushPendingDelta();
+            ensureStreamingAssistantMessage();
             updateChat(chatId, (chat) => ({
               ...chat,
               updatedAt: new Date().toISOString(),
@@ -946,6 +966,11 @@ export default function App() {
             return;
           }
           if (event.type === 'tool_event') {
+            if (flushTimer !== null) {
+              clearTimeout(flushTimer);
+              flushTimer = null;
+            }
+            flushPendingDelta();
             updateChat(chatId, (chat) => ({
               ...chat,
               messages: sortMessages(
@@ -962,6 +987,7 @@ export default function App() {
                 ),
               ),
             }));
+            splitAssistantMessageOnNextText = true;
             return;
           }
           if (event.type === 'user_input_request') {

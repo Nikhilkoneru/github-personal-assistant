@@ -17,7 +17,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/auth/local/session", post(create_local_session))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/github/device/start", post(device_start))
-        .route("/api/auth/github/device/{flow_id}", get(device_poll))
+        .route("/api/auth/github/device/:flow_id", get(device_poll))
 }
 
 async fn capabilities(

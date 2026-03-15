@@ -13,7 +13,7 @@ use crate::store::project_store;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/projects", get(list).post(create))
-        .route("/api/projects/{project_id}", get(get_one))
+        .route("/api/projects/:project_id", get(get_one))
 }
 
 async fn list(

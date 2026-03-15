@@ -577,6 +577,7 @@ impl AcpConnection {
         let mut current_assistant_text = String::new();
         let mut current_tool_calls: Vec<serde_json::Value> = Vec::new();
         let mut last_role: Option<String> = None;
+        let mut saw_tool_call_since_last_assistant_text = false;
 
         let timeout = tokio::time::sleep(std::time::Duration::from_secs(30));
         tokio::pin!(timeout);
@@ -590,12 +591,14 @@ impl AcpConnection {
                         Self::accumulate_replay_message(
                             &notif, &mut messages, &mut current_user_text,
                             &mut current_assistant_text, &mut current_tool_calls, &mut last_role,
+                            &mut saw_tool_call_since_last_assistant_text,
                         );
                     }
                     // Flush any remaining accumulated text
                     Self::flush_accumulated(
                         &mut messages, &mut current_user_text,
                         &mut current_assistant_text, &mut current_tool_calls, &mut last_role,
+                        &mut saw_tool_call_since_last_assistant_text,
                     );
 
                     match result {
@@ -617,6 +620,7 @@ impl AcpConnection {
                         Self::accumulate_replay_message(
                             &notif, &mut messages, &mut current_user_text,
                             &mut current_assistant_text, &mut current_tool_calls, &mut last_role,
+                            &mut saw_tool_call_since_last_assistant_text,
                         );
                     }
                 }
@@ -637,6 +641,7 @@ impl AcpConnection {
         current_assistant_text: &mut String,
         current_tool_calls: &mut Vec<serde_json::Value>,
         last_role: &mut Option<String>,
+        saw_tool_call_since_last_assistant_text: &mut bool,
     ) {
         if notif.method != "session/update" {
             return;
@@ -662,6 +667,7 @@ impl AcpConnection {
                         current_assistant_text,
                         current_tool_calls,
                         last_role,
+                        saw_tool_call_since_last_assistant_text,
                     );
                 }
                 if let Some(text) = update
@@ -674,34 +680,48 @@ impl AcpConnection {
                 *last_role = Some("user".into());
             }
             "agent_message_chunk" | "message" => {
-                // If we were accumulating user text, flush it
-                if last_role.as_deref() == Some("user") {
+                // Split a new assistant segment after tools complete so post-tool text
+                // becomes a new message instead of mutating the earlier one.
+                if last_role.as_deref() == Some("user")
+                    || (last_role.as_deref() == Some("assistant")
+                        && *saw_tool_call_since_last_assistant_text
+                        && (!current_assistant_text.is_empty() || !current_tool_calls.is_empty()))
+                {
                     Self::flush_accumulated(
                         messages,
                         current_user_text,
                         current_assistant_text,
                         current_tool_calls,
                         last_role,
+                        saw_tool_call_since_last_assistant_text,
                     );
                 }
-                if let Some(text) = update
-                    .get("content")
-                    .and_then(|c| c.get("text"))
-                    .and_then(|v| v.as_str())
-                {
-                    current_assistant_text.push_str(text);
+                if let Some(content) = update.get("content") {
+                    if let Some(text) = content.get("text").and_then(|v| v.as_str()) {
+                        current_assistant_text.push_str(text);
+                    } else if let Some(blocks) = content.as_array() {
+                        for block in blocks {
+                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                current_assistant_text.push_str(text);
+                            }
+                        }
+                    }
                 }
                 *last_role = Some("assistant".into());
             }
-            "tool_call" | "tool_call_update" => {
+            "tool_call" | "tool_call_update" | "tool_result" => {
                 // Collect tool call info alongside assistant message
                 let tool_info = json!({
                     "id": update.get("toolCallId").or(update.get("id")),
                     "name": update.get("title").or(update.get("name")),
                     "status": update.get("status"),
                     "arguments": update.get("rawInput").or(update.get("arguments")),
+                    "result": update.get("content").or(update.get("result")),
+                    "additionalContext": update.get("progressMessage"),
+                    "error": update.get("error"),
                 });
-                current_tool_calls.push(tool_info);
+                Self::upsert_replay_tool_call(current_tool_calls, tool_info);
+                *saw_tool_call_since_last_assistant_text = true;
                 *last_role = Some("assistant".into());
             }
             _ => {}
@@ -715,6 +735,7 @@ impl AcpConnection {
         current_assistant_text: &mut String,
         current_tool_calls: &mut Vec<serde_json::Value>,
         last_role: &mut Option<String>,
+        saw_tool_call_since_last_assistant_text: &mut bool,
     ) {
         if !current_user_text.is_empty() {
             messages.push(ReplayedMessage {
@@ -737,5 +758,39 @@ impl AcpConnection {
         }
         current_tool_calls.clear();
         *last_role = None;
+        *saw_tool_call_since_last_assistant_text = false;
+    }
+
+    fn upsert_replay_tool_call(
+        current_tool_calls: &mut Vec<serde_json::Value>,
+        next_tool_call: serde_json::Value,
+    ) {
+        let next_id = next_tool_call
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned);
+
+        if let Some(next_id) = next_id {
+            if let Some(existing) = current_tool_calls.iter_mut().find(|tool_call| {
+                tool_call
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value == next_id)
+                    .unwrap_or(false)
+            }) {
+                if let (Some(existing_object), Some(next_object)) =
+                    (existing.as_object_mut(), next_tool_call.as_object())
+                {
+                    for (key, value) in next_object {
+                        if !value.is_null() {
+                            existing_object.insert(key.clone(), value.clone());
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+
+        current_tool_calls.push(next_tool_call);
     }
 }

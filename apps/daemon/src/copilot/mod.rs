@@ -17,6 +17,10 @@ impl CopilotManager {
         }
     }
 
+    pub async fn create_fresh_connection(&self) -> anyhow::Result<Arc<AcpConnection>> {
+        Ok(Arc::new(AcpConnection::spawn().await?))
+    }
+
     pub async fn get_or_create_connection(&self) -> anyhow::Result<Arc<AcpConnection>> {
         let mut guard = self.connection.lock().await;
         if let Some(ref conn) = *guard {

@@ -35,18 +35,29 @@ pub struct JsonRpcNotification {
     pub params: Option<serde_json::Value>,
 }
 
-/// A message from the ACP agent — either a response or notification.
+/// A message from the ACP agent — either a response, notification, or server request.
 #[derive(Debug)]
 pub enum AcpMessage {
     Response(JsonRpcResponse),
     Notification(JsonRpcNotification),
+    /// Server-to-client request (has both `id` and `method`). Needs a response.
+    ServerRequest(JsonRpcRequest),
 }
 
 impl AcpMessage {
     pub fn from_value(val: serde_json::Value) -> Option<Self> {
-        if val.get("id").is_some() {
+        let has_id = val.get("id").is_some();
+        let has_method = val.get("method").is_some();
+        let has_result_or_error = val.get("result").is_some() || val.get("error").is_some();
+
+        if has_id && has_method && !has_result_or_error {
+            // Server-to-client request: has id + method, no result/error
+            serde_json::from_value::<JsonRpcRequest>(val).ok().map(AcpMessage::ServerRequest)
+        } else if has_id && has_result_or_error {
+            // Response to our request
             serde_json::from_value::<JsonRpcResponse>(val).ok().map(AcpMessage::Response)
-        } else if val.get("method").is_some() {
+        } else if has_method {
+            // Notification (no id)
             serde_json::from_value::<JsonRpcNotification>(val)
                 .ok()
                 .map(AcpMessage::Notification)

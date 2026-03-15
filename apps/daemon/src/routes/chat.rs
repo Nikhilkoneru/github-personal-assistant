@@ -248,12 +248,15 @@ async fn process_notification(
     streamed_content: &mut String,
 ) {
     if notif.method != "session/update" {
+        tracing::info!("ACP non-update notification: method={} params={}", notif.method, serde_json::to_string(&notif.params).unwrap_or_default());
         return;
     }
 
     let Some(ref params) = notif.params else { return };
     let Some(update) = params.get("update") else { return };
     let update_type = update.get("sessionUpdate").and_then(|v| v.as_str()).unwrap_or("");
+    tracing::info!("ACP session/update: type={update_type} status={}", 
+        update.get("status").and_then(|v| v.as_str()).unwrap_or("n/a"));
 
     match update_type {
         "agent_message_chunk" | "message" => {
@@ -278,7 +281,7 @@ async fn process_notification(
                 }
             }
         }
-        "reasoning" | "agent_reasoning_chunk" => {
+        "reasoning" | "agent_reasoning_chunk" | "agent_thought_chunk" => {
             if let Some(content) = update.get("content") {
                 if let Some(text) = content.get("text").and_then(|v| v.as_str()) {
                     let _ = tx.send(Ok(make_event(&json!({ "type": "reasoning_delta", "delta": text })))).await;
@@ -293,35 +296,54 @@ async fn process_notification(
             }
         }
         "tool_call" => {
-            let id = update.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let name = update.get("name").and_then(|v| v.as_str()).unwrap_or("Tool");
+            tracing::info!("ACP tool_call raw: {}", serde_json::to_string(update).unwrap_or_default());
+            // Copilot uses: toolCallId, title, kind, locations, rawInput, status
+            let id = update.get("toolCallId").and_then(|v| v.as_str())
+                .or_else(|| update.get("id").and_then(|v| v.as_str()))
+                .unwrap_or("unknown");
+            let name = update.get("title").and_then(|v| v.as_str())
+                .or_else(|| update.get("name").and_then(|v| v.as_str()))
+                .unwrap_or("Tool");
+            let kind = update.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("running");
             let now = chrono::Utc::now().to_rfc3339();
+
+            let mapped_status = match status {
+                "completed" | "done" => "completed",
+                "failed" | "error" => "failed",
+                _ => "running",
+            };
+
             let _ = tx.send(Ok(make_event(&json!({
                 "type": "tool_event",
                 "activity": {
                     "id": id,
                     "toolName": name,
-                    "status": "running",
+                    "kind": kind,
+                    "status": mapped_status,
                     "startedAt": now,
                     "updatedAt": now,
-                    "arguments": update.get("arguments").map(|v| v.to_string()),
+                    "arguments": update.get("rawInput").or(update.get("arguments")).map(|v| v.to_string()),
+                    "locations": update.get("locations"),
                 }
             })))).await;
         }
-        "tool_call_update" => {
-            let id = update.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+        "tool_call_update" | "tool_result" => {
+            let id = update.get("toolCallId").and_then(|v| v.as_str())
+                .or_else(|| update.get("id").and_then(|v| v.as_str()))
+                .unwrap_or("unknown");
             let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("running");
             let now = chrono::Utc::now().to_rfc3339();
             let mapped_status = match status {
-                "completed" => "completed",
-                "failed" => "failed",
+                "completed" | "done" => "completed",
+                "failed" | "error" => "failed",
                 _ => "running",
             };
             let _ = tx.send(Ok(make_event(&json!({
                 "type": "tool_event",
                 "activity": {
                     "id": id,
-                    "toolName": update.get("name").and_then(|v| v.as_str()).unwrap_or("Tool"),
+                    "toolName": update.get("title").or(update.get("name")).and_then(|v| v.as_str()).unwrap_or("Tool"),
                     "status": mapped_status,
                     "startedAt": now,
                     "updatedAt": now,
@@ -329,12 +351,11 @@ async fn process_notification(
                 }
             })))).await;
         }
-        "plan" => {
-            // Plans could be forwarded as tool activities or ignored
-            tracing::debug!("ACP plan update received");
+        "plan" | "agent_plan" => {
+            tracing::debug!("ACP plan update received: {}", serde_json::to_string(update).unwrap_or_default());
         }
         _ => {
-            tracing::debug!("Unknown ACP session update type: {update_type}");
+            tracing::warn!("Unknown ACP session update type: {update_type} | raw: {}", serde_json::to_string(update).unwrap_or_default());
         }
     }
 }

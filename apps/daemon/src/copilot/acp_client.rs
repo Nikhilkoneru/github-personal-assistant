@@ -11,7 +11,7 @@ use super::types::*;
 
 pub struct AcpConnection {
     child: Mutex<Child>,
-    pub(crate) writer: Mutex<tokio::process::ChildStdin>,
+    pub(crate) writer: Arc<Mutex<tokio::process::ChildStdin>>,
     pub(crate) next_id: AtomicU64,
     pub(crate) pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
     notification_tx: mpsc::UnboundedSender<JsonRpcNotification>,
@@ -39,7 +39,7 @@ impl AcpConnection {
                 let reader = BufReader::new(stderr);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!("copilot stderr: {}", line);
+                    tracing::info!("copilot stderr: {}", line);
                 }
             });
         }
@@ -51,6 +51,9 @@ impl AcpConnection {
         // Spawn reader task
         let pending_clone = pending.clone();
         let notif_tx = notification_tx.clone();
+        let (response_tx, mut response_rx) = mpsc::unbounded_channel::<String>();
+        let response_tx_clone = response_tx.clone();
+
         tokio::spawn(async move {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
@@ -74,8 +77,63 @@ impl AcpConnection {
                         }
                     }
                     Some(AcpMessage::Notification(notif)) => {
-                        // Handle client-side requests from the agent (fs, terminal)
-                        // For now, we just forward notifications
+                        let _ = notif_tx.send(notif);
+                    }
+                    Some(AcpMessage::ServerRequest(req)) => {
+                        tracing::info!("ACP server request: method={} id={:?} params={}", 
+                            req.method, req.id, serde_json::to_string(&req.params).unwrap_or_default());
+                        
+                        // Auto-approve tool permissions and other server requests
+                        let response = match req.method.as_str() {
+                            "session/requestPermission" | "session/request_permission" | "session/request" => {
+                                // Pick the "allow always" or "allow once" option
+                                let option_id = req.params.as_ref()
+                                    .and_then(|p| p.get("options"))
+                                    .and_then(|opts| opts.as_array())
+                                    .and_then(|arr| {
+                                        // Prefer "allow_always", fall back to "allow_once"
+                                        arr.iter()
+                                            .find(|o| o.get("optionId").and_then(|v| v.as_str()) == Some("allow_always"))
+                                            .or_else(|| arr.iter().find(|o| o.get("kind").and_then(|v| v.as_str()) == Some("allow_always")))
+                                            .or_else(|| arr.iter().find(|o| o.get("optionId").and_then(|v| v.as_str()) == Some("allow_once")))
+                                            .or_else(|| arr.first())
+                                    })
+                                    .and_then(|o| o.get("optionId").and_then(|v| v.as_str()))
+                                    .unwrap_or("allow_always");
+                                
+                                tracing::info!("Auto-approving permission with optionId: {option_id}");
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req.id,
+                                    "result": { "selectedOptionId": option_id }
+                                })
+                            }
+                            "session/userInput" => {
+                                // Auto-respond with empty input for now
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req.id,
+                                    "result": { "input": "" }
+                                })
+                            }
+                            _ => {
+                                // Generic success response
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "id": req.id,
+                                    "result": {}
+                                })
+                            }
+                        };
+                        let line = serde_json::to_string(&response).unwrap_or_default() + "\n";
+                        let _ = response_tx_clone.send(line);
+
+                        // Also forward as notification so the SSE handler can emit events
+                        let notif = JsonRpcNotification {
+                            jsonrpc: "2.0".into(),
+                            method: format!("_server_request/{}", req.method),
+                            params: req.params,
+                        };
                         let _ = notif_tx.send(notif);
                     }
                     None => {
@@ -86,9 +144,25 @@ impl AcpConnection {
             tracing::info!("ACP reader task ended");
         });
 
+        let writer_arc: Arc<Mutex<tokio::process::ChildStdin>> = Arc::new(Mutex::new(stdin));
+
+        // Spawn auto-response writer task
+        let writer_for_responses = writer_arc.clone();
+        tokio::spawn(async move {
+            while let Some(line) = response_rx.recv().await {
+                tracing::info!("Writing auto-response: {}", line.trim());
+                let mut w = writer_for_responses.lock().await;
+                if let Err(e) = w.write_all(line.as_bytes()).await {
+                    tracing::error!("Failed to write auto-response: {e}");
+                }
+                let _ = w.flush().await;
+                tracing::info!("Auto-response written successfully");
+            }
+        });
+
         let conn = AcpConnection {
             child: Mutex::new(child),
-            writer: Mutex::new(stdin),
+            writer: writer_arc,
             next_id: AtomicU64::new(1),
             pending,
             notification_tx,

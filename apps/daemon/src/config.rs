@@ -1,0 +1,164 @@
+use std::path::PathBuf;
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub host: String,
+    pub port: u16,
+    pub client_origin: String,
+    pub public_api_url: Option<String>,
+    pub tailscale_api_url: Option<String>,
+    pub remote_access_mode: String,
+    pub app_auth_mode: String,
+    pub daemon_owner_id: String,
+    pub daemon_owner_login: String,
+    pub daemon_owner_name: String,
+    pub copilot_use_logged_in_user: bool,
+    pub copilot_github_token: Option<String>,
+    pub default_model: String,
+    pub github_client_id: Option<String>,
+    pub github_client_secret: Option<String>,
+    pub github_callback_url: Option<String>,
+    pub app_support_dir: PathBuf,
+    pub database_path: PathBuf,
+    pub media_root: PathBuf,
+    pub service_access_token: Option<String>,
+}
+
+impl Config {
+    pub fn from_env() -> Self {
+        // Walk up directories to find .env
+        let mut dir = std::env::current_dir().unwrap_or_default();
+        loop {
+            let env_path = dir.join(".env");
+            if env_path.exists() {
+                let _ = dotenvy::from_path(&env_path);
+                break;
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+
+        let app_support_dir = std::env::var("APP_SUPPORT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                dirs_fallback().join("github-personal-assistant")
+            });
+
+        let host = env_or("HOST", "0.0.0.0");
+        let port = env_or("PORT", "4000").parse().unwrap_or(4000);
+        let tailscale_api_url = env_opt("TAILSCALE_API_URL");
+        let public_api_url = env_opt("PUBLIC_API_URL");
+        let remote_access_mode = env_or(
+            "REMOTE_ACCESS_MODE",
+            if tailscale_api_url.is_some() {
+                "tailscale"
+            } else if public_api_url.is_some() {
+                "public"
+            } else {
+                "local"
+            },
+        );
+
+        Config {
+            host,
+            port,
+            client_origin: env_or("CLIENT_ORIGIN", "*"),
+            public_api_url,
+            tailscale_api_url,
+            remote_access_mode,
+            app_auth_mode: env_or("APP_AUTH_MODE", "local"),
+            daemon_owner_id: env_or("DAEMON_OWNER_ID", "daemon-owner"),
+            daemon_owner_login: env_or("DAEMON_OWNER_LOGIN", "daemon"),
+            daemon_owner_name: env_or("DAEMON_OWNER_NAME", "Daemon owner"),
+            copilot_use_logged_in_user: env_or("COPILOT_USE_LOGGED_IN_USER", "true")
+                .parse()
+                .unwrap_or(true),
+            copilot_github_token: env_opt("COPILOT_GITHUB_TOKEN"),
+            default_model: env_or("DEFAULT_MODEL", "gpt-5-mini"),
+            github_client_id: env_opt("GITHUB_CLIENT_ID"),
+            github_client_secret: env_opt("GITHUB_CLIENT_SECRET"),
+            github_callback_url: env_opt("GITHUB_CALLBACK_URL"),
+            database_path: std::env::var("DATABASE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| app_support_dir.join("data").join("assistant.sqlite")),
+            media_root: std::env::var("MEDIA_ROOT")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| app_support_dir.join("media")),
+            app_support_dir,
+            service_access_token: env_opt("SERVICE_ACCESS_TOKEN"),
+        }
+    }
+
+    pub fn api_origin(&self) -> String {
+        format!("http://{}:{}", self.host, self.port)
+    }
+
+    pub fn is_copilot_configured(&self) -> bool {
+        self.copilot_github_token.is_some() || self.copilot_use_logged_in_user
+    }
+
+    pub fn copilot_auth_mode(&self) -> &str {
+        if self.copilot_github_token.is_some() {
+            "github-token"
+        } else if self.copilot_use_logged_in_user {
+            "logged-in-user"
+        } else {
+            "unconfigured"
+        }
+    }
+
+    pub fn is_auth_configured(&self) -> bool {
+        match self.app_auth_mode.as_str() {
+            "local" => true,
+            "github-device" => self.github_client_id.is_some(),
+            "github-oauth" => {
+                self.github_client_id.is_some()
+                    && self.github_client_secret.is_some()
+                    && self.github_callback_url.is_some()
+            }
+            _ => true,
+        }
+    }
+
+    pub fn is_remote_access_configured(&self) -> bool {
+        match self.remote_access_mode.as_str() {
+            "tailscale" => self.tailscale_api_url.is_some(),
+            "public" => self
+                .public_api_url
+                .as_ref()
+                .map(|u| !u.contains("localhost") && !u.contains("127.0.0.1"))
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+}
+
+fn env_or(key: &str, default: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+fn env_opt(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
+fn dirs_fallback() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        dirs_home().join("Library").join("Application Support")
+    } else if cfg!(target_os = "windows") {
+        std::env::var("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| dirs_home())
+    } else {
+        std::env::var("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| dirs_home().join(".local").join("share"))
+    }
+}
+
+fn dirs_home() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+}

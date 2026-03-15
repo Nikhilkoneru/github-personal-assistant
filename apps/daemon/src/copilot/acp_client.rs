@@ -2,12 +2,54 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 use super::types::*;
+
+/// Agent capabilities discovered during initialization.
+#[derive(Debug, Clone, Default)]
+pub struct AgentCapabilities {
+    pub load_session: bool,
+    pub list_sessions: bool,
+}
+
+/// A session entry returned by session/list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInfo {
+    pub session_id: String,
+    pub cwd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "_meta")]
+    pub meta: Option<serde_json::Value>,
+}
+
+/// Result of session/list with pagination.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSessionsResult {
+    pub sessions: Vec<SessionInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// A structured message parsed from session/load replay.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayedMessage {
+    pub role: String, // "user" or "assistant"
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<serde_json::Value>>,
+}
 
 pub struct AcpConnection {
     child: Mutex<Child>,
@@ -18,6 +60,7 @@ pub struct AcpConnection {
     pub(crate) notification_rx: Mutex<mpsc::UnboundedReceiver<JsonRpcNotification>>,
     initialized: Mutex<bool>,
     pub(crate) cached_models: Mutex<Option<serde_json::Value>>,
+    pub(crate) capabilities: Mutex<AgentCapabilities>,
 }
 
 impl AcpConnection {
@@ -169,6 +212,7 @@ impl AcpConnection {
             notification_rx: Mutex::new(notification_rx),
             initialized: Mutex::new(false),
             cached_models: Mutex::new(None),
+            capabilities: Mutex::new(AgentCapabilities::default()),
         };
 
         conn.initialize().await?;
@@ -241,9 +285,29 @@ impl AcpConnection {
             },
         };
 
-        let _resp = self
+        let resp = self
             .send_request("initialize", serde_json::to_value(params)?)
             .await?;
+
+        // Parse agent capabilities from initialize response
+        if let Some(result) = resp.result.as_ref() {
+            let mut caps = self.capabilities.lock().await;
+            caps.load_session = result
+                .get("agentCapabilities")
+                .and_then(|c| c.get("loadSession"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            caps.list_sessions = result
+                .get("agentCapabilities")
+                .and_then(|c| c.get("sessionCapabilities"))
+                .and_then(|c| c.get("list"))
+                .is_some();
+            tracing::info!(
+                "ACP capabilities: loadSession={}, listSessions={}",
+                caps.load_session,
+                caps.list_sessions
+            );
+        }
 
         *self.initialized.lock().await = true;
         tracing::info!("ACP connection initialized");
@@ -420,5 +484,258 @@ impl AcpConnection {
             out.push(notif);
         }
         out
+    }
+
+    /// Get discovered agent capabilities.
+    pub async fn get_capabilities(&self) -> AgentCapabilities {
+        self.capabilities.lock().await.clone()
+    }
+
+    /// List sessions known to the agent via ACP session/list.
+    /// Supports optional cwd filter and cursor-based pagination.
+    pub async fn list_sessions(
+        &self,
+        cwd: Option<&str>,
+        cursor: Option<&str>,
+    ) -> anyhow::Result<ListSessionsResult> {
+        let caps = self.capabilities.lock().await;
+        if !caps.list_sessions {
+            anyhow::bail!("Agent does not support session/list");
+        }
+        drop(caps);
+
+        let mut params = json!({});
+        if let Some(cwd) = cwd {
+            params["cwd"] = json!(cwd);
+        }
+        if let Some(cursor) = cursor {
+            params["cursor"] = json!(cursor);
+        }
+
+        let resp = self.send_request("session/list", params).await?;
+        let result = resp
+            .result
+            .ok_or_else(|| anyhow::anyhow!("No result in session/list response"))?;
+
+        let sessions: Vec<SessionInfo> = result
+            .get("sessions")
+            .and_then(|s| serde_json::from_value(s.clone()).ok())
+            .unwrap_or_default();
+        let next_cursor = result
+            .get("nextCursor")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        Ok(ListSessionsResult {
+            sessions,
+            next_cursor,
+        })
+    }
+
+    /// Load a session and collect the replayed conversation history.
+    /// Returns structured messages by consuming session/update notifications
+    /// until the session/load response arrives.
+    pub async fn load_session_messages(
+        &self,
+        session_id: &str,
+        cwd: &str,
+    ) -> anyhow::Result<Vec<ReplayedMessage>> {
+        let caps = self.capabilities.lock().await;
+        if !caps.load_session {
+            anyhow::bail!("Agent does not support session/load");
+        }
+        drop(caps);
+
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let msg = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "session/load",
+            "params": {
+                "sessionId": session_id,
+                "cwd": cwd,
+                "mcpServers": []
+            }
+        });
+
+        let (result_tx, result_rx) = oneshot::channel::<JsonRpcResponse>();
+        {
+            let mut map = self.pending.lock().await;
+            map.insert(id, result_tx);
+        }
+
+        let line = serde_json::to_string(&msg)? + "\n";
+        {
+            let mut writer = self.writer.lock().await;
+            writer.write_all(line.as_bytes()).await?;
+            writer.flush().await?;
+        }
+
+        // Collect replayed notifications until the response arrives
+        let mut messages: Vec<ReplayedMessage> = Vec::new();
+        let mut current_user_text = String::new();
+        let mut current_assistant_text = String::new();
+        let mut current_tool_calls: Vec<serde_json::Value> = Vec::new();
+        let mut last_role: Option<String> = None;
+
+        let timeout = tokio::time::sleep(std::time::Duration::from_secs(30));
+        tokio::pin!(timeout);
+        tokio::pin!(result_rx);
+
+        loop {
+            tokio::select! {
+                result = &mut result_rx => {
+                    // Drain remaining notifications
+                    for notif in self.drain_notifications().await {
+                        Self::accumulate_replay_message(
+                            &notif, &mut messages, &mut current_user_text,
+                            &mut current_assistant_text, &mut current_tool_calls, &mut last_role,
+                        );
+                    }
+                    // Flush any remaining accumulated text
+                    Self::flush_accumulated(
+                        &mut messages, &mut current_user_text,
+                        &mut current_assistant_text, &mut current_tool_calls, &mut last_role,
+                    );
+
+                    match result {
+                        Ok(resp) => {
+                            if let Some(ref err) = resp.error {
+                                anyhow::bail!("session/load error: {}", err.message);
+                            }
+                            // Cache models if returned
+                            if let Some(models) = resp.result.as_ref().and_then(|r| r.get("models")) {
+                                *self.cached_models.lock().await = Some(models.clone());
+                            }
+                        }
+                        Err(e) => anyhow::bail!("session/load channel error: {e}"),
+                    }
+                    break;
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {
+                    for notif in self.drain_notifications().await {
+                        Self::accumulate_replay_message(
+                            &notif, &mut messages, &mut current_user_text,
+                            &mut current_assistant_text, &mut current_tool_calls, &mut last_role,
+                        );
+                    }
+                }
+                _ = &mut timeout => {
+                    anyhow::bail!("session/load timed out");
+                }
+            }
+        }
+
+        Ok(messages)
+    }
+
+    /// Accumulate a replayed notification into the message list.
+    fn accumulate_replay_message(
+        notif: &JsonRpcNotification,
+        messages: &mut Vec<ReplayedMessage>,
+        current_user_text: &mut String,
+        current_assistant_text: &mut String,
+        current_tool_calls: &mut Vec<serde_json::Value>,
+        last_role: &mut Option<String>,
+    ) {
+        if notif.method != "session/update" {
+            return;
+        }
+        let Some(ref params) = notif.params else {
+            return;
+        };
+        let Some(update) = params.get("update") else {
+            return;
+        };
+        let update_type = update
+            .get("sessionUpdate")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        match update_type {
+            "user_message_chunk" => {
+                // If we were accumulating assistant text, flush it
+                if last_role.as_deref() == Some("assistant") {
+                    Self::flush_accumulated(
+                        messages,
+                        current_user_text,
+                        current_assistant_text,
+                        current_tool_calls,
+                        last_role,
+                    );
+                }
+                if let Some(text) = update
+                    .get("content")
+                    .and_then(|c| c.get("text"))
+                    .and_then(|v| v.as_str())
+                {
+                    current_user_text.push_str(text);
+                }
+                *last_role = Some("user".into());
+            }
+            "agent_message_chunk" | "message" => {
+                // If we were accumulating user text, flush it
+                if last_role.as_deref() == Some("user") {
+                    Self::flush_accumulated(
+                        messages,
+                        current_user_text,
+                        current_assistant_text,
+                        current_tool_calls,
+                        last_role,
+                    );
+                }
+                if let Some(text) = update
+                    .get("content")
+                    .and_then(|c| c.get("text"))
+                    .and_then(|v| v.as_str())
+                {
+                    current_assistant_text.push_str(text);
+                }
+                *last_role = Some("assistant".into());
+            }
+            "tool_call" | "tool_call_update" => {
+                // Collect tool call info alongside assistant message
+                let tool_info = json!({
+                    "id": update.get("toolCallId").or(update.get("id")),
+                    "name": update.get("title").or(update.get("name")),
+                    "status": update.get("status"),
+                    "arguments": update.get("rawInput").or(update.get("arguments")),
+                });
+                current_tool_calls.push(tool_info);
+                *last_role = Some("assistant".into());
+            }
+            _ => {}
+        }
+    }
+
+    /// Flush accumulated text into a message.
+    fn flush_accumulated(
+        messages: &mut Vec<ReplayedMessage>,
+        current_user_text: &mut String,
+        current_assistant_text: &mut String,
+        current_tool_calls: &mut Vec<serde_json::Value>,
+        last_role: &mut Option<String>,
+    ) {
+        if !current_user_text.is_empty() {
+            messages.push(ReplayedMessage {
+                role: "user".into(),
+                content: std::mem::take(current_user_text),
+                tool_calls: None,
+            });
+        }
+        if !current_assistant_text.is_empty() || !current_tool_calls.is_empty() {
+            let tools = if current_tool_calls.is_empty() {
+                None
+            } else {
+                Some(std::mem::take(current_tool_calls))
+            };
+            messages.push(ReplayedMessage {
+                role: "assistant".into(),
+                content: std::mem::take(current_assistant_text),
+                tool_calls: tools,
+            });
+        }
+        current_tool_calls.clear();
+        *last_role = None;
     }
 }

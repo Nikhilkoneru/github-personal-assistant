@@ -14,6 +14,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/threads", get(list).post(create))
         .route("/api/threads/{thread_id}", get(get_detail).patch(update))
+        .route("/api/threads/{thread_id}/messages", get(get_messages))
+        .route("/api/sessions", get(list_acp_sessions))
 }
 
 #[derive(Deserialize)]
@@ -75,10 +77,6 @@ async fn get_detail(
     let thread = thread_store::get_thread(&state.db, &session.user_id, &thread_id)
         .ok_or_else(|| AppError::NotFound("Thread not found.".into()))?;
 
-    // Try to load messages from ACP session
-    let messages: Vec<serde_json::Value> = Vec::new();
-    // TODO: hydrate from ACP session/load if copilot_session_id is present
-
     Ok(Json(json!({
         "thread": {
             "id": thread.id,
@@ -91,9 +89,103 @@ async fn get_detail(
             "createdAt": thread.created_at,
             "copilotSessionId": thread.copilot_session_id,
             "lastMessagePreview": thread.last_message_preview,
-            "messages": messages,
         }
     })))
+}
+
+/// Load messages for a thread via ACP session/load.
+/// This uses the protocol's history replay — no internal file reading.
+async fn get_messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(thread_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let session = require_session(&headers, &state.db, &state.config)?;
+    let thread = thread_store::get_thread(&state.db, &session.user_id, &thread_id)
+        .ok_or_else(|| AppError::NotFound("Thread not found.".into()))?;
+
+    let Some(ref copilot_session_id) = thread.copilot_session_id else {
+        // No ACP session yet — return empty messages
+        return Ok(Json(json!({ "messages": [] })));
+    };
+
+    let conn = state
+        .copilot
+        .get_or_create_connection()
+        .await
+        .map_err(|e| AppError::Internal(format!("Copilot connection failed: {e}")))?;
+
+    let caps = conn.get_capabilities().await;
+    if !caps.load_session {
+        return Ok(Json(json!({
+            "messages": [],
+            "error": "Agent does not support session/load"
+        })));
+    }
+
+    let cwd = std::env::current_dir()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    match conn.load_session_messages(copilot_session_id, &cwd).await {
+        Ok(messages) => Ok(Json(json!({ "messages": messages }))),
+        Err(e) => {
+            tracing::warn!("Failed to load session messages: {e}");
+            Ok(Json(json!({
+                "messages": [],
+                "error": format!("Failed to load session: {e}")
+            })))
+        }
+    }
+}
+
+/// List all ACP sessions via session/list protocol method.
+/// This is the pure ACP view — not filtered by our local thread table.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListSessionsQuery {
+    cwd: Option<String>,
+    cursor: Option<String>,
+}
+
+async fn list_acp_sessions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<ListSessionsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _session = require_session(&headers, &state.db, &state.config)?;
+
+    let conn = state
+        .copilot
+        .get_or_create_connection()
+        .await
+        .map_err(|e| AppError::Internal(format!("Copilot connection failed: {e}")))?;
+
+    let caps = conn.get_capabilities().await;
+    if !caps.list_sessions {
+        return Ok(Json(json!({
+            "sessions": [],
+            "error": "Agent does not support session/list"
+        })));
+    }
+
+    match conn
+        .list_sessions(query.cwd.as_deref(), query.cursor.as_deref())
+        .await
+    {
+        Ok(result) => Ok(Json(json!({
+            "sessions": result.sessions,
+            "nextCursor": result.next_cursor,
+        }))),
+        Err(e) => {
+            tracing::warn!("Failed to list sessions: {e}");
+            Ok(Json(json!({
+                "sessions": [],
+                "error": format!("Failed to list sessions: {e}")
+            })))
+        }
+    }
 }
 
 #[derive(Deserialize)]

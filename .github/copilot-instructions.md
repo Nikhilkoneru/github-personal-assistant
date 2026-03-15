@@ -9,10 +9,12 @@ After every code change, always complete these steps:
 3. **Build client**: `node apps/client/scripts/build.mjs` — this regenerates `dist/`, `service-worker.js`, and the build version hash
 4. **Restart backend**: Kill old process on port 4000, start with `HOST=0.0.0.0 node apps/api/dist/index.js`
 5. **Verify backend**: `curl -s http://localhost:4000/api/health`
-6. **Commit and push**: Always `git add -A && git commit && git push` — this triggers GitHub Pages deployment via `.github/workflows/deploy-pages.yml`
-7. **Verify deployment**: Check that the Pages workflow run completed successfully
+6. **Sync lockfile**: If `pnpm-lock.yaml` changed, regenerate with `npx pnpm@10.26.1 install` (CI uses pnpm 10.26.1; local may be pnpm 9 which produces incompatible lockfiles)
+7. **Commit and push**: Always `git add -A && git commit && git push` — this triggers GitHub Pages deployment via `.github/workflows/deploy-pages.yml`
+8. **Verify deployment**: Check that the Pages workflow run completed successfully
 
-**Never skip steps 3 and 6** — the client must be rebuilt (for service worker version) and pushed (for Pages deployment) on every change.
+**Never skip steps 3 and 7** — the client must be rebuilt (for service worker version) and pushed (for Pages deployment) on every change.
+**Always run step 6** when pnpm-lock.yaml is in the changeset — CI will fail with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` otherwise.
 
 ## Architecture
 

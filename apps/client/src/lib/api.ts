@@ -18,6 +18,8 @@ import type {
   UserSession,
 } from './types.js';
 
+import { gzipSync } from 'fflate';
+
 import { resolveApiUrl } from './api-config.js';
 
 const buildUrl = async (path: string) => `${await resolveApiUrl()}${path}`;
@@ -204,6 +206,47 @@ type UploadableAttachment = {
   file: File;
 };
 
+const MIN_COMPRESSIBLE_ATTACHMENT_BYTES = 64 * 1024;
+const MIN_COMPRESSION_SAVINGS_BYTES = 1024;
+const COMPRESSED_UPLOAD_MIME_TYPE = 'application/gzip';
+
+const isCompressibleAttachmentType = (mimeType: string) => mimeType === 'application/pdf' || mimeType.startsWith('image/');
+
+const prepareAttachmentUpload = async (attachment: UploadableAttachment) => {
+  const originalName = attachment.name || attachment.file.name || 'attachment';
+  const originalMimeType = attachment.mimeType?.trim() || attachment.file.type || 'application/octet-stream';
+
+  if (!isCompressibleAttachmentType(originalMimeType) || attachment.file.size < MIN_COMPRESSIBLE_ATTACHMENT_BYTES) {
+    return {
+      file: attachment.file,
+      fileName: originalName,
+      originalName,
+      originalMimeType,
+    };
+  }
+
+  const sourceBytes = new Uint8Array(await attachment.file.arrayBuffer());
+  const compressedBytes = gzipSync(sourceBytes, { level: 6 });
+  if (compressedBytes.byteLength + MIN_COMPRESSION_SAVINGS_BYTES >= sourceBytes.byteLength) {
+    return {
+      file: attachment.file,
+      fileName: originalName,
+      originalName,
+      originalMimeType,
+    };
+  }
+  const uploadBytes = new Uint8Array(compressedBytes.byteLength);
+  uploadBytes.set(compressedBytes);
+
+  return {
+    file: new Blob([uploadBytes], { type: COMPRESSED_UPLOAD_MIME_TYPE }),
+    fileName: `${originalName}.gz`,
+    originalName,
+    originalMimeType,
+    contentEncoding: 'gzip' as const,
+  };
+};
+
 export const uploadAttachment = async (
   attachment: UploadableAttachment,
   sessionToken: string,
@@ -211,7 +254,13 @@ export const uploadAttachment = async (
 ) => {
   const body = new FormData();
   const url = await buildUrl('/api/attachments');
-  body.append('file', attachment.file, attachment.name);
+  const preparedUpload = await prepareAttachmentUpload(attachment);
+  body.append('file', preparedUpload.file, preparedUpload.fileName);
+  body.append('originalName', preparedUpload.originalName);
+  body.append('originalMimeType', preparedUpload.originalMimeType);
+  if (preparedUpload.contentEncoding) {
+    body.append('contentEncoding', preparedUpload.contentEncoding);
+  }
 
   if (options?.threadId) {
     body.append('threadId', options.threadId);

@@ -10,6 +10,9 @@ importers:
 
   apps/client:
     dependencies:
+      fflate:
+        specifier: 0.8.2
+        version: 0.8.2
       react:
         specifier: 19.2.0
         version: 19.2.0
@@ -114,6 +117,9 @@ packages:
 
   extend@3.0.2:
     resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
+
+  fflate@0.8.2:
+    resolution: {integrity: sha512-cPJU47OaAoCbg0pBvzsgpTPhmhqI5eJjh/JIu8tPj5q+T7iLvW/JAYUqmE7KOB4R1ZyEhzBaIQpQpardBF5z8A==}
 
   hast-util-to-jsx-runtime@2.3.6:
     resolution: {integrity: sha512-zl6s8LwNyo1P9uw+XJGvZtdFF1GdAkOg8ujOw+4Pyb76874fLps4ueHXDhXWdk6YHQ6OgUtinliG7RsYvCbbBg==}
@@ -434,6 +440,8 @@ snapshots:
   estree-util-is-identifier-name@3.0.0: {}
 
   extend@3.0.2: {}
+
+  fflate@0.8.2: {}
 
   hast-util-to-jsx-runtime@2.3.6:
     dependencies:

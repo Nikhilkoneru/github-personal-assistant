@@ -1428,7 +1428,13 @@ export default function App() {
           </div>
 
           <div className="sidebar-header">
-            <h1>Assistant</h1>
+            <div className="sidebar-brand">
+              <img className="brand-mark" src="./icons/continuum-mark.svg" alt="" aria-hidden="true" />
+              <div className="brand-copy">
+                <h1>Continuum Chat</h1>
+                <div className="sidebar-brand-subtitle">Local coding companion</div>
+              </div>
+            </div>
             <div className="sidebar-header-actions">
               <IconButton label="Start new chat" onClick={() => void handleCreateChat()}>
                 <PlusIcon />
@@ -1582,7 +1588,13 @@ export default function App() {
                 ))}
               </div>
             ) : (
-              <div className="empty-state"><div><h2>Start the thread</h2><p>Messages persist on your daemon. Reconnect from any browser.</p></div></div>
+              <div className="empty-state">
+                <div className="empty-state-content">
+                  <img className="empty-state-logo" src="./icons/continuum-mark.svg" alt="" aria-hidden="true" />
+                  <h2>Start in Continuum</h2>
+                  <p>Messages stay on your daemon, so you can reconnect from any browser on your network or tailnet.</p>
+                </div>
+              </div>
             )}
           </div>
 

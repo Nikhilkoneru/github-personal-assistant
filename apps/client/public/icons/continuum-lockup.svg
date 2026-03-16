@@ -1,0 +1,28 @@
+<svg width="900" height="240" viewBox="0 0 900 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="900" height="240" rx="32" fill="#0B1020"/>
+  <g transform="translate(28,28)">
+    <rect width="184" height="184" rx="42" fill="url(#bg)"/>
+    <path d="M46 58C62 39 87 28 116 28C147 28 175 43 193 66" stroke="url(#ringA)" stroke-width="14" stroke-linecap="round"/>
+    <path d="M185 136C168 161 140 176 109 176C79 176 51 162 34 138" stroke="url(#ringB)" stroke-width="14" stroke-linecap="round"/>
+    <circle cx="177" cy="66" r="9" fill="#E6F4FF"/>
+    <circle cx="41" cy="136" r="7" fill="#D8B4FE"/>
+    <path d="M148 74C138 62 123 56 107 56C75 56 49 82 49 114C49 146 75 172 107 172C124 172 139 165 150 153" stroke="#F8FBFF" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="246" y="108" fill="#F8FBFF" font-family="Inter, SF Pro Display, Segoe UI, sans-serif" font-size="62" font-weight="700" letter-spacing="-0.04em">Continuum</text>
+  <text x="250" y="158" fill="#8FB4FF" font-family="Inter, SF Pro Display, Segoe UI, sans-serif" font-size="34" font-weight="600" letter-spacing="0.08em">CHAT</text>
+  <defs>
+    <linearGradient id="bg" x1="18" y1="12" x2="166" y2="173" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#121a34"/>
+      <stop offset="1" stop-color="#0b1020"/>
+    </linearGradient>
+    <linearGradient id="ringA" x1="46" y1="40" x2="172" y2="166" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="0.5" stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="ringB" x1="69" y1="27" x2="189" y2="145" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c084fc"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+  </defs>
+</svg>

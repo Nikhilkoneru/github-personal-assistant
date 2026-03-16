@@ -1,5 +1,6 @@
+use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::Context;
@@ -8,17 +9,18 @@ use crate::config::Config;
 use crate::runtime;
 
 pub fn install(config: &Config, start_now: bool) -> anyhow::Result<()> {
-    ensure_config_snapshot(config)?;
+    let managed_config = build_managed_config(config)?;
+    ensure_config_snapshot(&managed_config)?;
     let exe_path =
         std::env::current_exe().context("Could not determine the continuum executable path")?;
-    let definition_path = runtime::service_definition_path(config);
+    let definition_path = runtime::service_definition_path(&managed_config);
 
     if let Some(parent) = definition_path.parent() {
         fs::create_dir_all(parent)?;
     }
 
     if cfg!(target_os = "macos") {
-        fs::write(&definition_path, render_launchd_plist(config, &exe_path))?;
+        fs::write(&definition_path, render_launchd_plist(&managed_config, &exe_path))?;
         let domain = launchd_domain()?;
         let _ = run_command(
             "launchctl",
@@ -51,11 +53,11 @@ pub fn install(config: &Config, start_now: bool) -> anyhow::Result<()> {
             )?;
         }
     } else if cfg!(target_os = "windows") {
-        let runner_path = runtime::windows_service_runner_path(config);
+        let runner_path = runtime::windows_service_runner_path(&managed_config);
         if let Some(parent) = runner_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&runner_path, render_windows_runner(config, &exe_path))?;
+        fs::write(&runner_path, render_windows_runner(&managed_config, &exe_path))?;
         run_command(
             "schtasks",
             &[
@@ -75,7 +77,7 @@ pub fn install(config: &Config, start_now: bool) -> anyhow::Result<()> {
             let _ = run_command("schtasks", &["/Run", "/TN", runtime::service_name()]);
         }
     } else {
-        fs::write(&definition_path, render_systemd_unit(config, &exe_path))?;
+        fs::write(&definition_path, render_systemd_unit(&managed_config, &exe_path))?;
         run_command("systemctl", &["--user", "daemon-reload"])?;
         if start_now {
             run_command(
@@ -315,14 +317,115 @@ fn ensure_installed(config: &Config) -> anyhow::Result<()> {
 }
 
 fn ensure_config_snapshot(config: &Config) -> anyhow::Result<()> {
-    if config.config_file_path.exists() {
-        return Ok(());
-    }
-
     if let Some(parent) = config.config_file_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&config.config_file_path, config.to_env_file_contents())?;
+    let rendered = config.to_env_file_contents();
+    if config.config_file_path.exists()
+        && fs::read_to_string(&config.config_file_path).ok().as_deref() == Some(rendered.as_str())
+    {
+        return Ok(());
+    }
+    fs::write(&config.config_file_path, rendered)?;
+    Ok(())
+}
+
+fn build_managed_config(config: &Config) -> anyhow::Result<Config> {
+    let mut managed = config.clone();
+    if managed.copilot_bin.is_none() {
+        if let Ok(path) = stable_copilot_command(config) {
+            managed.copilot_bin = Some(path);
+        }
+    }
+    Ok(managed)
+}
+
+fn stable_copilot_command(config: &Config) -> anyhow::Result<String> {
+    let resolved = runtime::resolve_copilot_command(config)?;
+    let canonical = fs::canonicalize(&resolved).unwrap_or(resolved);
+    let extension = canonical.extension().and_then(|value| value.to_str());
+
+    if extension.is_some_and(|value| value.eq_ignore_ascii_case("js")) {
+        return write_copilot_wrapper(config, &canonical);
+    }
+
+    Ok(runtime::path_to_string(&canonical))
+}
+
+fn write_copilot_wrapper(config: &Config, loader_path: &Path) -> anyhow::Result<String> {
+    let node_path = resolve_node_binary()?;
+    let wrapper_path = if cfg!(target_os = "windows") {
+        config.app_support_dir.join("scripts").join("copilot-wrapper.cmd")
+    } else {
+        config.app_support_dir.join("scripts").join("copilot-wrapper.sh")
+    };
+
+    if let Some(parent) = wrapper_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let node = runtime::path_to_string(&node_path);
+    let loader = runtime::path_to_string(loader_path);
+    let contents = if cfg!(target_os = "windows") {
+        format!("@echo off\r\n\"{}\" \"{}\" %*\r\n", node, loader)
+    } else {
+        format!(
+            "#!/bin/sh\nexec {} {} \"$@\"\n",
+            shell_escape(&node),
+            shell_escape(&loader)
+        )
+    };
+    fs::write(&wrapper_path, contents)?;
+    make_executable(&wrapper_path)?;
+    Ok(runtime::path_to_string(&wrapper_path))
+}
+
+fn resolve_node_binary() -> anyhow::Result<PathBuf> {
+    let mut candidates = search_path("node");
+    if cfg!(target_os = "macos") {
+        candidates.push(PathBuf::from("/opt/homebrew/bin/node"));
+        candidates.push(PathBuf::from("/usr/local/bin/node"));
+    } else if cfg!(target_os = "linux") {
+        candidates.push(PathBuf::from("/usr/local/bin/node"));
+        candidates.push(PathBuf::from("/usr/bin/node"));
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(fs::canonicalize(&candidate).unwrap_or(candidate));
+        }
+    }
+
+    anyhow::bail!("Could not find node to build a stable Copilot wrapper.")
+}
+
+fn search_path(binary_name: &str) -> Vec<PathBuf> {
+    let mut names = vec![binary_name.to_string()];
+    if cfg!(target_os = "windows") && !binary_name.ends_with(".exe") {
+        names.push(format!("{binary_name}.exe"));
+        names.push(format!("{binary_name}.cmd"));
+        names.push(format!("{binary_name}.bat"));
+    }
+
+    env::var_os("PATH")
+        .map(|raw| {
+            env::split_paths(&raw)
+                .flat_map(|entry| names.iter().map(move |name| entry.join(name)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn make_executable(path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions)?;
+    }
+
     Ok(())
 }
 

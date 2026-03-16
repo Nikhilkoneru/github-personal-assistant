@@ -45,6 +45,8 @@ struct TailscaleSelfNode {
 
 #[derive(Debug, Default, Deserialize)]
 struct TailscaleServeStatus {
+    #[serde(rename = "Web", default)]
+    web: HashMap<String, TailscaleServeWeb>,
     #[serde(rename = "Foreground", default)]
     foreground: HashMap<String, TailscaleServeConfig>,
     #[serde(rename = "Background", default)]
@@ -270,10 +272,16 @@ fn status_has_https_proxy(status: &TailscaleRemoteAccessStatus) -> bool {
 
 fn all_serve_entries(status: &TailscaleServeStatus) -> Vec<(&str, &TailscaleServeWeb)> {
     status
+        .web
+        .iter()
+        .map(|(host, web)| (host.as_str(), web))
+        .chain(
+            status
         .foreground
         .values()
         .chain(status.background.values())
-        .flat_map(|config| config.web.iter().map(|(host, web)| (host.as_str(), web)))
+                .flat_map(|config| config.web.iter().map(|(host, web)| (host.as_str(), web))),
+        )
         .collect()
 }
 
@@ -324,6 +332,34 @@ mod tests {
                           "Proxy": "http://127.0.0.1:4000"
                         }
                       }
+                    }
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            extract_serve_url_for_port(&status, 4000).as_deref(),
+            Some("https://example.ts.net")
+        );
+    }
+
+    #[test]
+    fn extracts_https_url_from_top_level_web_shape() {
+        let status: TailscaleServeStatus = serde_json::from_str(
+            r#"{
+              "TCP": {
+                "443": {
+                  "HTTPS": true
+                }
+              },
+              "Web": {
+                "example.ts.net:443": {
+                  "Handlers": {
+                    "/": {
+                      "Proxy": "http://127.0.0.1:4000"
                     }
                   }
                 }

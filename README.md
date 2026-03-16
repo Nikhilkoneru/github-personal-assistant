@@ -42,6 +42,46 @@ continuum update
 
 to upgrade in place from future releases.
 
+## Durable macOS install with Tailscale HTTPS
+
+If you want Continuum Chat to come back after daemon crashes and macOS restarts, install Tailscale first, then install Continuum as a login service.
+
+1. Install Tailscale on macOS.
+   - Recommended: download the standalone macOS installer from `https://tailscale.com/download`
+   - Alternative: install the Mac App Store version
+2. Open Tailscale, click **Log in** or **Get Started**, and sign up / sign in with your preferred identity provider.
+3. Approve the macOS VPN/network extension prompt if Tailscale asks for it.
+4. Confirm your Mac joined the tailnet. A quick check is:
+
+```bash
+tailscale status
+```
+
+5. Install the Continuum CLI and place `continuum` on your `PATH`.
+6. Install the auto-start service and launch it immediately:
+
+```bash
+continuum daemon service install --start-now
+```
+
+7. Verify local health:
+
+```bash
+curl -s http://127.0.0.1:4000/api/health
+continuum daemon doctor
+```
+
+8. Turn on HTTPS access through Tailscale Serve:
+
+```bash
+continuum remote-access tailscale enable
+continuum remote-access tailscale status
+```
+
+9. Open the secure Tailscale URL shown by `continuum remote-access tailscale status` or `continuum daemon doctor`.
+
+On macOS, `continuum daemon service install --start-now` installs a `launchd` user service with `RunAtLoad` and `KeepAlive`, so Continuum comes back when you sign back in after a reboot and is restarted automatically if the daemon exits unexpectedly.
+
 ## Package manager status
 
 `continuum` is **not published to Homebrew, Winget, Scoop, apt, or Chocolatey yet**.
@@ -101,6 +141,14 @@ continuum update
 
 For customer access across devices, install **Tailscale on the machine running `continuum` and on the customer device**.
 
+For the macOS host machine, the recommended order is:
+
+1. Install Tailscale from `https://tailscale.com/download`
+2. Launch it and complete sign-in / sign-up in the browser
+3. Confirm the Mac is connected to your tailnet
+4. Install Continuum and run `continuum daemon service install --start-now`
+5. Run `continuum remote-access tailscale enable`
+
 Once both devices are signed into the same tailnet:
 
 1. Start the daemon with `continuum run daemon` or install the login service with `continuum daemon service install`
@@ -115,7 +163,7 @@ Once both devices are signed into the same tailnet:
 The long-term product model is:
 
 - `continuum run daemon` for foreground/local runs
-- `continuum` service/install commands for starting on login
+- `continuum daemon service install --start-now` for starting on login and immediately booting the daemon
 - `continuum daemon service restart` for a clean daemon restart after upgrades or config changes
 
 If you are packaging or distributing `continuum` internally, prefer shipping the CLI binary and letting the CLI own daemon lifecycle instead of wrapping the Rust binary directly.

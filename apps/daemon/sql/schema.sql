@@ -84,6 +84,23 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 CREATE INDEX IF NOT EXISTS idx_attachments_user ON attachments(github_user_id, uploaded_at DESC);
 
+CREATE TABLE IF NOT EXISTS message_attachment_sets (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  user_message_index INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(thread_id, user_message_index)
+);
+CREATE INDEX IF NOT EXISTS idx_message_attachment_sets_thread
+  ON message_attachment_sets(thread_id, user_message_index);
+
+CREATE TABLE IF NOT EXISTS message_attachment_set_items (
+  message_attachment_set_id TEXT NOT NULL REFERENCES message_attachment_sets(id) ON DELETE CASCADE,
+  attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  PRIMARY KEY (message_attachment_set_id, attachment_id)
+);
+
 CREATE TABLE IF NOT EXISTS app_preferences (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,

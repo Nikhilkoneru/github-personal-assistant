@@ -14,7 +14,7 @@ import type {
   ThreadDetail,
   ThreadSummary,
   UserSession,
-} from '@github-personal-assistant/shared';
+} from './types.js';
 
 import { resolveApiUrl } from './api-config.js';
 

@@ -222,14 +222,14 @@ async fn stream_chat(
             }
         };
 
-        let acp_session_id = if let Some(ref existing_id) = thread.copilot_session_id {
+        let (acp_session_id, session_was_resumed) = if let Some(ref existing_id) = thread.copilot_session_id {
             if conn.is_alive().await {
                 let _ = tx
                     .send(Ok(make_event(
                         &json!({ "type": "session", "sessionId": existing_id }),
                     )))
                     .await;
-                existing_id.clone()
+                (existing_id.clone(), true)
             } else {
                 match conn.new_session().await {
                     Ok(id) => {
@@ -239,7 +239,7 @@ async fn stream_chat(
                                 &json!({ "type": "session", "sessionId": id }),
                             )))
                             .await;
-                        id
+                        (id, false)
                     }
                     Err(e) => {
                         let _ = tx
@@ -259,7 +259,7 @@ async fn stream_chat(
                             &json!({ "type": "session", "sessionId": id }),
                         )))
                         .await;
-                    id
+                    (id, false)
                 }
                 Err(e) => {
                     let _ = tx
@@ -284,6 +284,30 @@ async fn stream_chat(
                 return;
             }
         };
+        if !attachment_ids.is_empty() {
+            match next_user_message_index(&conn, &acp_session_id, !session_was_resumed).await {
+                Some(user_message_index) => {
+                    if let Err(error) = attachment_store::save_message_attachments(
+                        &state_clone.db,
+                        &thread_id,
+                        user_message_index,
+                        &attachment_ids,
+                    ) {
+                        tracing::warn!(
+                            "Failed to persist attachment mapping for thread {}: {}",
+                            thread_id,
+                            error
+                        );
+                    }
+                }
+                None => {
+                    tracing::warn!(
+                        "Could not determine the next user message index for thread {}; attachments will not be replayed.",
+                        thread_id
+                    );
+                }
+            }
+        }
 
         let mut streamed_content = String::new();
         let mut streamed_reasoning = String::new();
@@ -404,6 +428,30 @@ fn build_prompt_content(
 
 fn make_event(data: &serde_json::Value) -> Event {
     Event::default().data(serde_json::to_string(data).unwrap_or_default())
+}
+
+async fn next_user_message_index(
+    conn: &crate::copilot::acp_client::AcpConnection,
+    session_id: &str,
+    assume_empty: bool,
+) -> Option<usize> {
+    if assume_empty {
+        return Some(0);
+    }
+
+    let capabilities = conn.get_capabilities().await;
+    if !capabilities.load_session {
+        return None;
+    }
+
+    let cwd = std::env::current_dir().ok()?.to_string_lossy().to_string();
+    let replayed_messages = conn.load_session_messages(session_id, &cwd).await.ok()?;
+    Some(
+        replayed_messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .count(),
+    )
 }
 
 async fn process_notification(

@@ -8,7 +8,6 @@ fn main() {
     println!("cargo:rerun-if-changed=../client/scripts/build.mjs");
     println!("cargo:rerun-if-changed=../client/src");
     println!("cargo:rerun-if-changed=../client/tsconfig.build.json");
-    println!("cargo:rerun-if-changed=../../packages/shared/src");
     println!("cargo:rerun-if-changed=../../pnpm-lock.yaml");
 
     if let Ok(target) = env::var("TARGET") {

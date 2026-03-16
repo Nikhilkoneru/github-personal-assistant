@@ -1,157 +1,129 @@
-# Github Personal Assistant
+# GitHub Personal Assistant
 
-Mac-hosted personal developer assistant with a React web client, a Rust daemon, local SQLite metadata, and GitHub Copilot conversations powered through ACP.
+`gcpa` is a local GitHub Copilot companion that runs a Rust daemon on your machine and serves the web UI from the same process. You install one CLI, run one daemon, and open one same-origin app for chat, projects, threads, ACP tool activity, attachments, and device-auth flows.
 
-This project is intentionally built as a **single-user daemon** running on your Mac. The frontend is a remote shell for that daemon, not a multi-tenant SaaS app. The product entrypoint is the `gcpa` CLI.
+## Install the CLI
 
-## Workspace
+The official distribution channel is **GitHub Releases**.
 
-- `apps/client` — static React web client and PWA shell
-- `apps/daemon` — Rust + Axum backend and the `gcpa` product CLI
-- `packages/shared` — shared TypeScript API shapes used by the client
-- `projects/acp-sdk-research` — preserved ACP SDK research notes and the vendored reference SDK, kept out of the repo root for a cleaner open-source layout
+1. Open the latest release: `https://github.com/nikhilkoneru/github-personal-assistant/releases/latest`
+2. Download the archive for your platform:
+   - macOS Apple Silicon: `gcpa-aarch64-apple-darwin.tar.gz`
+   - macOS Intel: `gcpa-x86_64-apple-darwin.tar.gz`
+   - Linux x86_64: `gcpa-x86_64-unknown-linux-gnu.tar.gz`
+   - Windows x86_64: `gcpa-x86_64-pc-windows-msvc.zip`
+3. Extract the archive and place `gcpa` (or `gcpa.exe`) somewhere on your `PATH`
 
-## Product model
-
-### One CLI, two surfaces
-
-`gcpa` is the product control plane:
-
-- `gcpa daemon ...` runs and manages the local backend
-- `gcpa update` installs the latest published CLI release for the current platform
-- the browser UI is the day-to-day conversation surface
-- the Settings modal is the lightweight in-app “menu” for version, lifecycle, log path, update, and access hints
-- the daemon itself serves the bundled web UI and `/api` from the same origin
-
-### App auth and Copilot runtime auth are separate
-
-These are different concerns:
-
-- **app auth** = how the frontend is allowed to use the daemon
-- **Copilot runtime auth** = how the daemon itself talks to Copilot
-
-App auth currently supports:
-
-- `local`
-- `github-device`
-- `github-oauth`
-
-Copilot runtime auth currently supports:
-
-- logged-in local Copilot/GitHub user on the Mac
-- explicit GitHub token override
-- explicit `COPILOT_BIN` override when the `copilot` executable is not on PATH
-
-For this product, `APP_AUTH_MODE=local` is the recommended default.
-
-## Data and state
-
-The daemon stores app-owned data under `APP_SUPPORT_DIR`, which defaults to:
-
-- macOS: `~/Library/Application Support/github-personal-assistant/`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/github-personal-assistant/`
-- Windows: `%APPDATA%/github-personal-assistant/`
-
-Important paths include:
-
-- `config/daemon.env` — stable daemon config used by auto-start installs
-- `logs/daemon.log` — persistent daemon log file
-- `data/assistant.sqlite` — projects, threads, preferences, auth sessions, and attachment metadata
-- `media/` — uploaded attachment files
-
-The daemon talks to Copilot through ACP (`copilot --acp --stdio`). Transcript history is replayed from ACP sessions when the client loads a thread, so the Copilot runtime remains the source of truth for message content while SQLite stores only app-owned metadata.
-
-## Getting started
-
-1. Install dependencies for the web packages:
+Example for macOS Apple Silicon:
 
 ```bash
-pnpm install
+curl -L \
+  https://github.com/nikhilkoneru/github-personal-assistant/releases/latest/download/gcpa-aarch64-apple-darwin.tar.gz \
+  -o gcpa.tar.gz
+tar -xzf gcpa.tar.gz
+install -m 755 gcpa ~/.local/bin/gcpa
 ```
 
-2. Copy the environment file and fill in the values you want to use:
+After the first install, use:
 
 ```bash
-cp .env.example .env
+gcpa update
 ```
 
-3. Run the daemon locally:
+to upgrade in place from future releases.
+
+## Package manager status
+
+`gcpa` is **not published to Homebrew, Winget, Scoop, apt, or Chocolatey yet**.
+
+Those ecosystems require additional external repositories or package registries that cannot be fully managed from this repo alone. The release workflow now produces versioned archives and checksums so adding Homebrew and Winget next is straightforward, but GitHub Releases are the supported install path today.
+
+## Run the daemon
+
+Start the local daemon:
 
 ```bash
-cargo run --manifest-path apps/daemon/Cargo.toml --bin gcpa -- daemon run
+gcpa run daemon
 ```
 
-You can override the port directly from the CLI when needed:
+Then open the UI:
 
 ```bash
-cargo run --manifest-path apps/daemon/Cargo.toml --bin gcpa -- daemon run --port 4310
+gcpa open
 ```
 
-4. Open the app in your browser:
+The UI is served directly by the daemon, so the browser talks to the API over the same origin. There is no separate GitHub Pages deployment anymore.
+
+Useful lifecycle commands:
 
 ```bash
-http://127.0.0.1:4000/
+gcpa status
+gcpa restart
+gcpa update --check
+gcpa update
 ```
 
-5. For frontend development only, you can still run the standalone dev server:
+## Auto-start and service management
+
+The long-term product model is:
+
+- `gcpa run daemon` for foreground/local runs
+- `gcpa` service/install commands for starting on login
+- `gcpa restart` for a clean daemon restart after upgrades or config changes
+
+If you are packaging or distributing `gcpa` internally, prefer shipping the CLI binary and letting the CLI own daemon lifecycle instead of wrapping the Rust binary directly.
+
+## Configuration
+
+The daemon serves both the API and bundled UI locally. Port and runtime behavior are configured through the CLI/runtime config rather than a separate frontend deployment.
+
+If you change config that affects the listening port or network binding, restart the daemon so the UI and API stay aligned on the same origin.
+
+## Features
+
+- Rust daemon with bundled React SPA
+- GitHub Copilot chat via ACP
+- Same-origin UI and API
+- Thread/project persistence
+- Attachment upload and rendering
+- Device-auth and local session flows
+- Tool call activity and interactive ACP permission/input handling
+- CLI-driven updates via GitHub Releases
+
+## Repository layout
+
+- `apps/daemon` — Rust CLI + daemon
+- `apps/client` — React UI bundled into the daemon at build time
+- `projects/` — local project material and non-product experiments
+
+## Development
+
+Install dependencies:
 
 ```bash
-pnpm dev:client:web
+npx pnpm@10.26.1 install
 ```
 
-That rebuilds the client on changes, but the product/default runtime is the daemon-served UI.
+Validate the client:
 
-## Install / restart / update story
+```bash
+pnpm exec tsc -p apps/client/tsconfig.build.json --noEmit
+node apps/client/scripts/build.mjs
+```
 
-`gcpa` now has an explicit lifecycle model instead of ad-hoc shell commands:
+Validate the daemon:
 
-- Diagnose the local environment: `gcpa daemon doctor`
-- Show config/log/data paths: `gcpa daemon paths`
-- Install start-at-login service: `gcpa daemon service install`
-- Check status: `gcpa daemon service status`
-- Restart after config or binary changes: `gcpa daemon service restart`
-- Remove start-at-login service: `gcpa daemon service uninstall`
+```bash
+cargo build --manifest-path apps/daemon/Cargo.toml --bin gcpa
+cargo test --manifest-path apps/daemon/Cargo.toml
+```
 
-The auto-start implementation uses the native user-level service manager for each platform:
+## Release process
 
-- macOS: `launchd` (`~/Library/LaunchAgents/...`)
-- Linux: `systemd --user` (`~/.config/systemd/user/...`)
-- Windows: Task Scheduler (login task + runner script under `APP_SUPPORT_DIR`)
+Tagged releases build platform archives for macOS, Linux, and Windows and publish them to GitHub Releases. The same release feed powers `gcpa update`.
 
-The default config file path is `APP_SUPPORT_DIR/config/daemon.env`. If it does not exist yet, `gcpa daemon service install` will create one from the current resolved settings so the background service has a stable config source.
+## Notes
 
-`gcpa update` downloads the newest published CLI release for your current target and replaces the current executable in place. If you installed the auto-start service, use `gcpa update --restart-service` so the background daemon restarts onto the new binary immediately.
-
-Tagging a release such as `v0.1.0` triggers the release workflow, which builds platform-specific `gcpa` archives for:
-
-- macOS Apple Silicon (`aarch64-apple-darwin`)
-- macOS Intel (`x86_64-apple-darwin`)
-- Linux x86_64 (`x86_64-unknown-linux-gnu`)
-- Windows x86_64 (`x86_64-pc-windows-msvc`)
-
-Those release assets are what `gcpa update` consumes.
-
-## Runtime UX in the browser
-
-There is not a separate native tray/menu app in this build. Instead:
-
-- the browser/PWA is the primary user interface
-- the Settings modal shows daemon version, lifecycle mode, Copilot CLI detection, config/log paths, and the exact `gcpa` restart/update/open-UI commands
-- connection settings still let one UI instance point at another daemon URL when you explicitly want that
-
-That keeps the product simple while still giving users a discoverable place to find lifecycle instructions.
-
-## Notes and operational details
-
-- For Copilot auth on a Mac daemon, the default path is the logged-in local Copilot/GitHub user (`COPILOT_USE_LOGGED_IN_USER=true`).
-- `COPILOT_GITHUB_TOKEN` only overrides that behavior.
-- `APP_AUTH_MODE=local` is the recommended default for this single-user daemon.
-- The frontend negotiates auth with the backend and creates a local session automatically in local mode.
-- For GitHub device-flow app auth, set `APP_AUTH_MODE=github-device` and `GITHUB_CLIENT_ID`.
-- For redirect-based GitHub OAuth app auth, set `APP_AUTH_MODE=github-oauth` plus `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `GITHUB_CALLBACK_URL`.
-- `TAILSCALE_API_URL` is the preferred remote URL when you want the daemon to advertise a stable Tailscale browser entrypoint.
-- `REMOTE_ACCESS_MODE` controls how the daemon advertises itself in `/api/health` (`local`, `tailscale`, or `public`).
-
-## Bundled UI behavior
-
-The React client is still exported as static files, but those files are now bundled into the `gcpa` binary at build time and served directly by the daemon. That keeps the frontend and backend version-matched, avoids cross-origin drift, and means the same local/Tailscale/public daemon URL serves both the UI shell and `/api`.
+- The old GitHub Pages deployment path has been removed.
+- The old shared TypeScript package has been folded into the client package.
+- Local research material under `projects/` is not part of the shipped product surface.

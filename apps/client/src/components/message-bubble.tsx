@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatToolActivity } from '@github-personal-assistant/shared';
+import type { ChatMessage, ChatToolActivity } from '../lib/types.js';
 import { MarkdownContent } from './markdown-content.js';
 
 type MessageBubbleProps = {

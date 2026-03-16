@@ -37,9 +37,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Shared typecheck
-        run: pnpm --filter @github-personal-assistant/shared typecheck
-
       - name: Client typecheck
         run: pnpm exec tsc -p apps/client/tsconfig.build.json --noEmit
 

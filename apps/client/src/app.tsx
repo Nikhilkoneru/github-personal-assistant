@@ -12,7 +12,7 @@ import type {
   ReasoningEffort,
   ThreadDetail,
   ThreadSummary,
-} from '@github-personal-assistant/shared';
+} from './lib/types.js';
 
 import { MessageBubble } from './components/message-bubble.js';
 import {

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::get;
@@ -10,7 +12,10 @@ use crate::auth_middleware::require_session;
 use crate::copilot::acp_client::ReplayedMessage;
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::store::thread_store::{self, ThreadSummary};
+use crate::store::{
+    attachment_store,
+    thread_store::{self, ThreadSummary},
+};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +49,8 @@ struct ChatMessageResponse {
     role: String,
     content: String,
     created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attachments: Option<Vec<attachment_store::AttachmentSummary>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<ChatMessageMetadataResponse>,
 }
@@ -268,11 +275,13 @@ async fn load_thread_messages(
         .to_string_lossy()
         .to_string();
     let replayed_messages = conn.load_session_messages(copilot_session_id, &cwd).await?;
+    let attachment_sets = attachment_store::list_message_attachments(&state.db, &thread.id)?;
 
     Ok(replayed_messages_to_chat_messages(
         &replayed_messages,
         &thread.created_at,
         &thread.id,
+        &attachment_sets,
     ))
 }
 
@@ -280,8 +289,14 @@ fn replayed_messages_to_chat_messages(
     replayed_messages: &[ReplayedMessage],
     base_timestamp: &str,
     thread_id: &str,
+    attachment_sets: &[attachment_store::MessageAttachmentSet],
 ) -> Vec<ChatMessageResponse> {
     let base_time = parse_base_time(base_timestamp);
+    let attachment_sets_by_user_index = attachment_sets
+        .iter()
+        .map(|set| (set.user_message_index, set.attachments.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut user_message_index = 0usize;
 
     replayed_messages
         .iter()
@@ -293,12 +308,20 @@ fn replayed_messages_to_chat_messages(
                 .as_ref()
                 .map(|tool_calls| tool_calls_to_activities(tool_calls, &created_at))
                 .filter(|tool_calls| !tool_calls.is_empty());
+            let attachments = if replayed_message.role == "user" {
+                let attachments = attachment_sets_by_user_index.get(&user_message_index).cloned();
+                user_message_index += 1;
+                attachments
+            } else {
+                None
+            };
 
             ChatMessageResponse {
                 id: format!("{thread_id}-replay-{index}"),
                 role: replayed_message.role.clone(),
                 content: replayed_message.content.clone(),
                 created_at,
+                attachments,
                 metadata: tool_activities.map(|tool_activities| ChatMessageMetadataResponse {
                     tool_activities: Some(tool_activities),
                 }),

@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { AuthCapabilities, GitHubDeviceAuthStart, UserSession } from '@github-personal-assistant/shared';
+import type { AuthCapabilities, GitHubDeviceAuthStart, UserSession } from '../lib/types.js';
 
 import {
   bootstrapLocalSession,

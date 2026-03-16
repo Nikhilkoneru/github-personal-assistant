@@ -180,7 +180,7 @@ Existing installs that previously used the `gcpa` / `github-personal-assistant` 
 
 This repository is licensed under the **Apache License 2.0**. See [`LICENSE`](./LICENSE).
 
-You can use, modify, and redistribute the project under that license, and contributions are welcome through issues and pull requests.
+You can use, modify, and redistribute the project under that license, and contributions are welcome through issues and pull requests. See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the preferred workflow and contribution guidelines.
 
 ## Features
 

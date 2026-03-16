@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::remote_access;
 
@@ -36,9 +37,17 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Self {
-        let initial_app_support_dir = env_path("APP_SUPPORT_DIR").unwrap_or_else(default_app_support_dir);
-        let initial_config_path = env_path(CONFIG_FILE_ENV)
-            .or_else(|| env_path(LEGACY_CONFIG_FILE_ENV))
+        let explicit_app_support_dir = env_path("APP_SUPPORT_DIR");
+        let explicit_config_path = env_path(CONFIG_FILE_ENV).or_else(|| env_path(LEGACY_CONFIG_FILE_ENV));
+        if explicit_app_support_dir.is_none() && explicit_config_path.is_none() {
+            if let Err(error) = migrate_legacy_app_support_dir() {
+                eprintln!("Continuum warning: failed to migrate legacy app support directory: {error}");
+            }
+        }
+
+        let initial_app_support_dir =
+            explicit_app_support_dir.unwrap_or_else(default_app_support_dir);
+        let initial_config_path = explicit_config_path
             .unwrap_or_else(|| default_config_path(&initial_app_support_dir));
 
         if initial_config_path.exists() {
@@ -249,18 +258,69 @@ fn default_config_path(app_support_dir: &std::path::Path) -> PathBuf {
 }
 
 fn default_app_support_dir() -> PathBuf {
-    let base = dirs_fallback();
-    let preferred = base.join(APP_SUPPORT_DIR_NAME);
-    if preferred.exists() {
-        return preferred;
+    dirs_fallback().join(APP_SUPPORT_DIR_NAME)
+}
+
+fn migrate_legacy_app_support_dir() -> std::io::Result<()> {
+    let legacy = dirs_fallback().join(LEGACY_APP_SUPPORT_DIR_NAME);
+    let preferred = default_app_support_dir();
+    if !legacy.exists() || preferred.exists() {
+        return Ok(());
     }
 
-    let legacy = base.join(LEGACY_APP_SUPPORT_DIR_NAME);
-    if legacy.exists() {
-        return legacy;
+    fs::rename(&legacy, &preferred)?;
+    rewrite_path_references(&default_config_path(&preferred), &legacy, &preferred)?;
+
+    for definition_path in known_service_definition_paths() {
+        rewrite_path_references(&definition_path, &legacy, &preferred)?;
     }
 
-    preferred
+    Ok(())
+}
+
+fn rewrite_path_references(path: &Path, from: &Path, to: &Path) -> std::io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let contents = fs::read_to_string(path)?;
+    let from = from.to_string_lossy();
+    let to = to.to_string_lossy();
+    let updated = contents.replace(from.as_ref(), to.as_ref());
+    if updated != contents {
+        fs::write(path, updated)?;
+    }
+
+    Ok(())
+}
+
+fn known_service_definition_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if cfg!(target_os = "macos") {
+        paths.push(
+            dirs_home()
+                .join("Library")
+                .join("LaunchAgents")
+                .join("dev.continuum-chat.continuum.plist"),
+        );
+    } else if cfg!(target_os = "windows") {
+        paths.push(
+            default_app_support_dir()
+                .join("scripts")
+                .join("continuum-daemon.cmd"),
+        );
+    } else {
+        paths.push(
+            dirs_home()
+                .join(".config")
+                .join("systemd")
+                .join("user")
+                .join("dev.continuum-chat.continuum.service"),
+        );
+    }
+
+    paths
 }
 
 fn assignment(key: &str, value: Option<&str>) -> String {
@@ -292,4 +352,30 @@ fn dirs_home() -> PathBuf {
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewrite_path_references_updates_matching_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("daemon.env");
+        let from = temp.path().join("github-personal-assistant");
+        let to = temp.path().join("continuum-chat");
+        fs::write(&file, format!("APP_SUPPORT_DIR=\"{}\"\n", from.display())).unwrap();
+
+        rewrite_path_references(&file, &from, &to).unwrap();
+
+        let contents = fs::read_to_string(&file).unwrap();
+        assert!(contents.contains(&to.to_string_lossy().to_string()));
+        assert!(!contents.contains(&from.to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn default_app_support_dir_uses_continuum_name() {
+        assert!(default_app_support_dir()
+            .ends_with(Path::new(APP_SUPPORT_DIR_NAME)));
+    }
 }

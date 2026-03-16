@@ -174,7 +174,7 @@ The daemon serves both the API and bundled UI locally. Port and runtime behavior
 
 If you change config that affects the listening port or network binding, restart the daemon so the UI and API stay aligned on the same origin.
 
-Existing installs that previously used the `gcpa` / `github-personal-assistant` name keep working: Continuum still reads legacy config paths and browser storage keys so you do not lose local settings or data during the rename.
+Existing installs that previously used the `gcpa` / `github-personal-assistant` name are migrated forward automatically when possible, and Continuum still preserves legacy browser storage key compatibility so you do not lose local settings during the rename.
 
 ## License and contributions
 

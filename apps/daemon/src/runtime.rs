@@ -44,6 +44,7 @@ pub struct DaemonRuntimeInfo {
     pub status_hint: String,
     pub logs_hint: String,
     pub update_hint: String,
+    pub open_hint: String,
     pub ui_access_url: String,
     pub ui_access_hint: String,
     pub copilot: ToolStatus,
@@ -126,6 +127,16 @@ pub fn build_runtime_info(config: &Config, started_at: &str) -> DaemonRuntimeInf
     let service_definition_path = service_definition_path(config);
     let service_installed = service_definition_path.exists();
     let ui_access_url = config.preferred_ui_origin();
+    let ui_access_hint = match config.remote_access_mode.as_str() {
+        "tailscale" => format!(
+            "Open {} in a browser on a device with Tailscale installed and signed into the same tailnet. The same origin serves both the UI and /api.",
+            ui_access_url
+        ),
+        _ => format!(
+            "Open {} in your browser. The same origin serves both the UI and /api.",
+            ui_access_url
+        ),
+    };
     let logs_hint = if cfg!(target_os = "windows") {
         format!(
             "Get-Content -Path '{}' -Wait",
@@ -161,11 +172,9 @@ pub fn build_runtime_info(config: &Config, started_at: &str) -> DaemonRuntimeInf
         } else {
             format!("{} update", cli_name())
         },
+        open_hint: format!("{} open", cli_name()),
         ui_access_url: ui_access_url.clone(),
-        ui_access_hint: format!(
-            "Open {} in your browser. The same origin serves both the UI and /api.",
-            ui_access_url
-        ),
+        ui_access_hint,
         copilot,
     }
 }
@@ -205,7 +214,12 @@ pub fn build_doctor_report(config: &Config, started_at: &str) -> DoctorReport {
                 "tailscale" => config
                     .tailscale_api_url
                     .clone()
-                    .unwrap_or_else(|| "TAILSCALE_API_URL is not configured.".to_string()),
+                    .map(|url| {
+                        format!(
+                            "{url} (install Tailscale on this machine and the customer device, then open the same URL there)"
+                        )
+                    })
+                    .unwrap_or_else(|| "Tailscale is not running or no Tailscale URL could be detected.".to_string()),
                 "public" => config
                     .public_api_url
                     .clone()
@@ -216,6 +230,20 @@ pub fn build_doctor_report(config: &Config, started_at: &str) -> DoctorReport {
     ];
 
     DoctorReport { runtime, checks }
+}
+
+pub fn open_browser(url: &str) -> anyhow::Result<()> {
+    let status = if cfg!(target_os = "macos") {
+        Command::new("open").arg(url).status()?
+    } else if cfg!(target_os = "windows") {
+        Command::new("cmd").args(["/C", "start", "", url]).status()?
+    } else {
+        Command::new("xdg-open").arg(url).status()?
+    };
+    if !status.success() {
+        anyhow::bail!("Browser open command failed for {url}");
+    }
+    Ok(())
 }
 
 pub fn resolve_copilot_command(config: &Config) -> anyhow::Result<PathBuf> {

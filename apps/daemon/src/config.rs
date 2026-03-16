@@ -1,4 +1,7 @@
 use std::path::PathBuf;
+use std::process::Command;
+
+use serde::Deserialize;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -51,7 +54,8 @@ impl Config {
 
         let host = env_or("HOST", "0.0.0.0");
         let port = env_or("PORT", "4000").parse().unwrap_or(4000);
-        let tailscale_api_url = env_opt("TAILSCALE_API_URL");
+        let tailscale_api_url = env_opt("TAILSCALE_API_URL")
+            .or_else(|| detect_tailscale_api_url(port));
         let public_api_url = env_opt("PUBLIC_API_URL");
         let remote_access_mode = env_or(
             "REMOTE_ACCESS_MODE",
@@ -198,6 +202,52 @@ impl Config {
         lines.push(String::new());
         lines.join("\n")
     }
+}
+
+#[derive(Deserialize)]
+struct TailscaleStatus {
+    #[serde(rename = "BackendState")]
+    backend_state: Option<String>,
+    #[serde(rename = "Self")]
+    self_node: Option<TailscaleSelfNode>,
+}
+
+#[derive(Deserialize)]
+struct TailscaleSelfNode {
+    #[serde(rename = "DNSName")]
+    dns_name: Option<String>,
+    #[serde(rename = "TailscaleIPs")]
+    tailscale_ips: Option<Vec<String>>,
+}
+
+fn detect_tailscale_api_url(port: u16) -> Option<String> {
+    let output = Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let status: TailscaleStatus = serde_json::from_slice(&output.stdout).ok()?;
+    if status.backend_state.as_deref() != Some("Running") {
+        return None;
+    }
+
+    let self_node = status.self_node?;
+    let host = self_node
+        .dns_name
+        .as_deref()
+        .map(|value| value.trim_end_matches('.').to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            self_node
+                .tailscale_ips
+                .as_ref()
+                .and_then(|ips| ips.first().cloned())
+        })?;
+
+    Some(format!("http://{host}:{port}"))
 }
 
 impl Config {

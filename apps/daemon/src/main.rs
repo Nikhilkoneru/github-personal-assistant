@@ -36,6 +36,7 @@ enum CommandGroup {
     Daemon(DaemonCommand),
     #[command(subcommand)]
     Run(RunCommand),
+    Open,
     Update(UpdateArgs),
 }
 
@@ -169,6 +170,12 @@ async fn main() -> anyhow::Result<()> {
             ServiceCommand::Restart => service::restart(&config),
             ServiceCommand::Print => service::print_definition(&config),
         },
+        Some(CommandGroup::Open) => {
+            let url = config.preferred_ui_origin();
+            runtime::open_browser(&url)?;
+            println!("Opened {url}");
+            Ok(())
+        }
         Some(CommandGroup::Update(args)) => {
             update::run(
                 &config,

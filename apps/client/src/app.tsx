@@ -1288,7 +1288,9 @@ export default function App() {
             <div className="helper-text">Restart: <code>{daemonRuntime.restartHint}</code></div>
             <div className="helper-text">Status: <code>{daemonRuntime.statusHint}</code></div>
             <div className="helper-text">Update: <code>{daemonRuntime.updateHint}</code></div>
+            <div className="helper-text">Open: <code>{daemonRuntime.openHint}</code></div>
             <div className="helper-text">UI URL: <code>{daemonRuntime.uiAccessUrl}</code></div>
+            <div className="helper-text">Frontend API origin: <code>{activeApiUrl}</code></div>
             <div className="helper-text">{daemonRuntime.uiAccessHint}</div>
           </div>
         ) : null}

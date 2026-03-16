@@ -54,14 +54,29 @@ gcpa open
 
 The UI is served directly by the daemon, so the browser talks to the API over the same origin. There is no separate GitHub Pages deployment anymore.
 
+By default, the frontend uses the exact origin you opened in the browser. If you open a Tailscale URL, the frontend uses that Tailscale URL for API requests too.
+
 Useful lifecycle commands:
 
 ```bash
-gcpa status
-gcpa restart
+gcpa open
+gcpa daemon service status
+gcpa daemon service restart
 gcpa update --check
 gcpa update
 ```
+
+## Remote access with Tailscale
+
+For customer access across devices, install **Tailscale on the machine running `gcpa` and on the customer device**.
+
+Once both devices are signed into the same tailnet:
+
+1. Start the daemon with `gcpa run daemon` or install the login service with `gcpa daemon service install`
+2. Run `gcpa open` on the host machine, or use the Tailscale URL shown in the Settings screen / `gcpa daemon doctor`
+3. Open that same Tailscale URL on the customer device
+
+The app is same-origin, so the UI and API stay aligned automatically when opened over Tailscale.
 
 ## Auto-start and service management
 
@@ -69,7 +84,7 @@ The long-term product model is:
 
 - `gcpa run daemon` for foreground/local runs
 - `gcpa` service/install commands for starting on login
-- `gcpa restart` for a clean daemon restart after upgrades or config changes
+- `gcpa daemon service restart` for a clean daemon restart after upgrades or config changes
 
 If you are packaging or distributing `gcpa` internally, prefer shipping the CLI binary and letting the CLI own daemon lifecycle instead of wrapping the Rust binary directly.
 

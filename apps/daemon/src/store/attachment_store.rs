@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -51,7 +49,7 @@ pub fn save_attachment(
     let file_path = media_root.join(&file_name);
     std::fs::write(&file_path, bytes)?;
 
-    let conn = db.conn.lock().unwrap();
+    let conn = db.lock()?;
     conn.execute(
         "INSERT INTO attachments (id, github_user_id, thread_id, name, mime_type, size, kind, file_path, created_at, updated_at, uploaded_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -72,37 +70,6 @@ pub fn save_attachment(
     })
 }
 
-pub fn get_attachment_file_path(db: &Database, owner_id: &str, attachment_id: &str) -> Option<PathBuf> {
-    let conn = db.conn.lock().unwrap();
-    conn.query_row(
-        "SELECT file_path FROM attachments WHERE id = ?1 AND github_user_id = ?2",
-        rusqlite::params![attachment_id, owner_id],
-        |row| {
-            let p: String = row.get(0)?;
-            Ok(PathBuf::from(p))
-        },
-    )
-    .ok()
-}
 
-pub fn list_thread_attachments(db: &Database, owner_id: &str, thread_id: &str) -> Vec<AttachmentSummary> {
-    let conn = db.conn.lock().unwrap();
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, name, mime_type, size, kind, uploaded_at FROM attachments WHERE github_user_id = ?1 AND thread_id = ?2 ORDER BY uploaded_at DESC",
-        )
-        .unwrap();
-    stmt.query_map(rusqlite::params![owner_id, thread_id], |row| {
-        Ok(AttachmentSummary {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            mime_type: row.get(2)?,
-            size: row.get(3)?,
-            kind: row.get(4)?,
-            uploaded_at: row.get(5)?,
-        })
-    })
-    .unwrap()
-    .filter_map(|r| r.ok())
-    .collect()
-}
+
+

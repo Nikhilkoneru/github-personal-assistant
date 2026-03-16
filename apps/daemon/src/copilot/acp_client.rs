@@ -56,7 +56,6 @@ pub struct AcpConnection {
     pub(crate) writer: Arc<Mutex<tokio::process::ChildStdin>>,
     pub(crate) next_id: AtomicU64,
     pub(crate) pending: Arc<Mutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>>,
-    notification_tx: mpsc::UnboundedSender<JsonRpcNotification>,
     pub(crate) notification_rx: Mutex<mpsc::UnboundedReceiver<JsonRpcNotification>>,
     initialized: Mutex<bool>,
     pub(crate) cached_models: Mutex<Option<serde_json::Value>>,
@@ -64,8 +63,9 @@ pub struct AcpConnection {
 }
 
 impl AcpConnection {
-    pub async fn spawn() -> anyhow::Result<Self> {
-        let mut child = Command::new("copilot")
+    pub async fn spawn(config: &crate::config::Config) -> anyhow::Result<Self> {
+        let copilot_command = crate::runtime::resolve_copilot_command(config)?;
+        let mut child = Command::new(&copilot_command)
             .args(["--acp", "--stdio"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -208,7 +208,6 @@ impl AcpConnection {
             writer: writer_arc,
             next_id: AtomicU64::new(1),
             pending,
-            notification_tx,
             notification_rx: Mutex::new(notification_rx),
             initialized: Mutex::new(false),
             cached_models: Mutex::new(None),
@@ -274,7 +273,7 @@ impl AcpConnection {
             protocol_version: 1,
             client_info: ClientInfo {
                 name: "gpa-daemon".to_string(),
-                version: "1.0.0".to_string(),
+                version: crate::runtime::app_version().to_string(),
             },
             capabilities: ClientCapabilities {
                 prompt_capabilities: Some(PromptCapabilities {
@@ -355,86 +354,6 @@ impl AcpConnection {
 
     pub async fn get_cached_models(&self) -> Option<serde_json::Value> {
         self.cached_models.lock().await.clone()
-    }
-
-    pub async fn load_session(&self, session_id: &str) -> anyhow::Result<serde_json::Value> {
-        let resp = self
-            .send_request("session/load", json!({ "sessionId": session_id }))
-            .await?;
-        Ok(resp.result.unwrap_or(serde_json::Value::Null))
-    }
-
-    /// Send a prompt and stream session/update notifications.
-    /// Returns a receiver for notifications and a future that resolves to the prompt result.
-    pub async fn prompt(
-        &self,
-        session_id: &str,
-        content: Vec<serde_json::Value>,
-    ) -> anyhow::Result<(
-        mpsc::UnboundedReceiver<JsonRpcNotification>,
-        tokio::task::JoinHandle<anyhow::Result<serde_json::Value>>,
-    )> {
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let msg = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "session/prompt",
-            "params": {
-                "sessionId": session_id,
-                "prompt": content
-            }
-        });
-
-        let (result_tx, result_rx) = oneshot::channel::<JsonRpcResponse>();
-        {
-            let mut map = self.pending.lock().await;
-            map.insert(id, result_tx);
-        }
-
-        // Create a dedicated notification channel for this prompt
-        let (notif_tx, notif_rx) = mpsc::unbounded_channel();
-
-        // Drain the shared notification channel into the per-prompt channel
-        let shared_notif_tx = self.notification_tx.clone();
-        let shared_notif_rx_handle = {
-            let mut rx = self.notification_rx.lock().await;
-            let (forward_tx, mut forward_rx) = mpsc::unbounded_channel();
-
-            // Swap the receiver — take ownership for forwarding
-            // Actually, let's use a different approach: subscribe to notifications
-            // For simplicity, forward from the shared channel
-            tokio::spawn({
-                let notif_tx = notif_tx.clone();
-                async move {
-                    while let Some(notif) = forward_rx.recv().await {
-                        let _ = notif_tx.send(notif);
-                    }
-                }
-            });
-
-            // Replace the main receiver with a forwarding one
-            drop(rx);
-            drop(shared_notif_tx);
-            drop(forward_tx);
-            // This approach is getting complex. Let me simplify.
-        };
-        let _ = shared_notif_rx_handle;
-
-        let line = serde_json::to_string(&msg)? + "\n";
-        {
-            let mut writer = self.writer.lock().await;
-            writer.write_all(line.as_bytes()).await?;
-            writer.flush().await?;
-        }
-
-        let result_handle = tokio::spawn(async move {
-            let resp = tokio::time::timeout(std::time::Duration::from_secs(600), result_rx)
-                .await
-                .map_err(|_| anyhow::anyhow!("Prompt timed out"))??;
-            Ok(resp.result.unwrap_or(serde_json::Value::Null))
-        });
-
-        Ok((notif_rx, result_handle))
     }
 
     pub async fn cancel_session(&self, session_id: &str) -> anyhow::Result<()> {

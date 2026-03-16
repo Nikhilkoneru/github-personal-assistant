@@ -19,31 +19,35 @@ pub struct Config {
     pub github_client_secret: Option<String>,
     pub github_callback_url: Option<String>,
     pub app_support_dir: PathBuf,
+    pub config_file_path: PathBuf,
     pub database_path: PathBuf,
     pub media_root: PathBuf,
+    pub log_file_path: PathBuf,
     pub service_access_token: Option<String>,
+    pub copilot_bin: Option<String>,
 }
 
 impl Config {
     pub fn from_env() -> Self {
-        // Walk up directories to find .env
-        let mut dir = std::env::current_dir().unwrap_or_default();
-        loop {
-            let env_path = dir.join(".env");
-            if env_path.exists() {
-                let _ = dotenvy::from_path(&env_path);
-                break;
-            }
-            if !dir.pop() {
-                break;
-            }
+        let initial_app_support_dir = std::env::var("APP_SUPPORT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| dirs_fallback().join("github-personal-assistant"));
+        let initial_config_path = std::env::var("GCPA_CONFIG_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_config_path(&initial_app_support_dir));
+
+        if initial_config_path.exists() {
+            let _ = dotenvy::from_path(&initial_config_path);
+        } else {
+            load_workspace_env();
         }
 
         let app_support_dir = std::env::var("APP_SUPPORT_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                dirs_fallback().join("github-personal-assistant")
-            });
+            .unwrap_or(initial_app_support_dir);
+        let config_file_path = std::env::var("GCPA_CONFIG_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_config_path(&app_support_dir));
 
         let host = env_or("HOST", "0.0.0.0");
         let port = env_or("PORT", "4000").parse().unwrap_or(4000);
@@ -59,6 +63,9 @@ impl Config {
                 "local"
             },
         );
+        let log_file_path = std::env::var("LOG_FILE_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| app_support_dir.join("logs").join("daemon.log"));
 
         Config {
             host,
@@ -86,7 +93,19 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| app_support_dir.join("media")),
             app_support_dir,
+            config_file_path,
+            log_file_path,
             service_access_token: env_opt("SERVICE_ACCESS_TOKEN"),
+            copilot_bin: env_opt("COPILOT_BIN"),
+        }
+    }
+
+    pub fn apply_cli_overrides(&mut self, host: Option<String>, port: Option<u16>) {
+        if let Some(host) = host.filter(|value| !value.trim().is_empty()) {
+            self.host = host;
+        }
+        if let Some(port) = port {
+            self.port = port;
         }
     }
 
@@ -132,6 +151,36 @@ impl Config {
             _ => false,
         }
     }
+
+    pub fn to_env_file_contents(&self) -> String {
+        let mut lines = vec![
+            "# gcpa daemon configuration".to_string(),
+            assignment("HOST", Some(&self.host)),
+            assignment("PORT", Some(&self.port.to_string())),
+            assignment("CLIENT_ORIGIN", Some(&self.client_origin)),
+            assignment("DEFAULT_MODEL", Some(&self.default_model)),
+            assignment("PUBLIC_API_URL", self.public_api_url.as_deref()),
+            assignment("TAILSCALE_API_URL", self.tailscale_api_url.as_deref()),
+            assignment("REMOTE_ACCESS_MODE", Some(&self.remote_access_mode)),
+            assignment("APP_SUPPORT_DIR", Some(&self.app_support_dir.to_string_lossy())),
+            assignment("DATABASE_PATH", Some(&self.database_path.to_string_lossy())),
+            assignment("MEDIA_ROOT", Some(&self.media_root.to_string_lossy())),
+            assignment("LOG_FILE_PATH", Some(&self.log_file_path.to_string_lossy())),
+            assignment("SERVICE_ACCESS_TOKEN", self.service_access_token.as_deref()),
+            assignment("APP_AUTH_MODE", Some(&self.app_auth_mode)),
+            assignment("DAEMON_OWNER_ID", Some(&self.daemon_owner_id)),
+            assignment("DAEMON_OWNER_LOGIN", Some(&self.daemon_owner_login)),
+            assignment("DAEMON_OWNER_NAME", Some(&self.daemon_owner_name)),
+            assignment("COPILOT_USE_LOGGED_IN_USER", Some(if self.copilot_use_logged_in_user { "true" } else { "false" })),
+            assignment("COPILOT_GITHUB_TOKEN", self.copilot_github_token.as_deref()),
+            assignment("COPILOT_BIN", self.copilot_bin.as_deref()),
+            assignment("GITHUB_CLIENT_ID", self.github_client_id.as_deref()),
+            assignment("GITHUB_CLIENT_SECRET", self.github_client_secret.as_deref()),
+            assignment("GITHUB_CALLBACK_URL", self.github_callback_url.as_deref()),
+        ];
+        lines.push(String::new());
+        lines.join("\n")
+    }
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -140,6 +189,31 @@ fn env_or(key: &str, default: &str) -> String {
 
 fn env_opt(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
+fn load_workspace_env() {
+    let mut dir = std::env::current_dir().unwrap_or_default();
+    loop {
+        let env_path = dir.join(".env");
+        if env_path.exists() {
+            let _ = dotenvy::from_path(&env_path);
+            break;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+}
+
+fn default_config_path(app_support_dir: &std::path::Path) -> PathBuf {
+    app_support_dir.join("config").join("daemon.env")
+}
+
+fn assignment(key: &str, value: Option<&str>) -> String {
+    match value.filter(|raw| !raw.trim().is_empty()) {
+        Some(value) => format!("{key}=\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")),
+        None => format!("{key}="),
+    }
 }
 
 fn dirs_fallback() -> PathBuf {

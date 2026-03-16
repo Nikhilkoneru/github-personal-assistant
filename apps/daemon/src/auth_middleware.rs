@@ -9,7 +9,6 @@ pub struct AuthSession {
     pub login: String,
     pub name: Option<String>,
     pub avatar_url: Option<String>,
-    pub github_access_token: String,
 }
 
 pub fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -36,7 +35,7 @@ pub fn check_service_access(headers: &HeaderMap, config: &Config) -> bool {
 }
 
 pub fn get_session(db: &Database, config: &Config, token: &str) -> Option<AuthSession> {
-    let conn = db.conn.lock().unwrap();
+    let conn = db.lock().ok()?;
     let now = crate::db::now_iso();
     let mut stmt = conn
         .prepare(
@@ -51,7 +50,6 @@ pub fn get_session(db: &Database, config: &Config, token: &str) -> Option<AuthSe
         |row| {
             Ok(AuthSession {
                 session_token: row.get(0)?,
-                github_access_token: row.get(1)?,
                 user_id: row.get(2)?,
                 login: row.get(3)?,
                 name: row.get(4)?,

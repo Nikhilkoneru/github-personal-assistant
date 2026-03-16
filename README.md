@@ -2,24 +2,25 @@
 
 Mac-hosted personal developer assistant with a React web client, a Rust daemon, local SQLite metadata, and GitHub Copilot conversations powered through ACP.
 
-This project is intentionally built as a **single-user daemon** running on your Mac. The frontend is a remote shell for that daemon, not a multi-tenant SaaS app.
+This project is intentionally built as a **single-user daemon** running on your Mac. The frontend is a remote shell for that daemon, not a multi-tenant SaaS app. The product entrypoint is the `gcpa` CLI.
 
 ## Workspace
 
-- `apps/client` -- static React web client and PWA shell
-- `apps/daemon` -- Rust + Axum backend that exposes the app API and talks to Copilot over ACP
-- `packages/shared` -- shared TypeScript API shapes used by the client
+- `apps/client` — static React web client and PWA shell
+- `apps/daemon` — Rust + Axum backend and the `gcpa` product CLI
+- `packages/shared` — shared TypeScript API shapes used by the client
+- `projects/acp-sdk-research` — preserved ACP SDK research notes and the vendored reference SDK, kept out of the repo root for a cleaner open-source layout
 
-## Current architecture
+## Product model
 
-### Single-user daemon-owner model
+### One CLI, two surfaces
 
-The app is designed around one durable daemon owner.
+`gcpa` is the product control plane:
 
-- the daemon owns the durable data
-- app auth controls access to the daemon
-- app auth does **not** decide data ownership
-- switching auth modes should not fork or hide history
+- `gcpa daemon ...` runs and manages the local backend
+- the browser UI is the day-to-day conversation surface
+- the Settings modal is the lightweight in-app “menu” for version, lifecycle, log path, and deployment hints
+- `gcpa ui deploy ...` publishes the hosted frontend to a GitHub Pages repo
 
 ### App auth and Copilot runtime auth are separate
 
@@ -38,29 +39,11 @@ Copilot runtime auth currently supports:
 
 - logged-in local Copilot/GitHub user on the Mac
 - explicit GitHub token override
-- external Copilot CLI URL when configured
+- explicit `COPILOT_BIN` override when the `copilot` executable is not on PATH
 
 For this product, `APP_AUTH_MODE=local` is the recommended default.
 
-## Current capabilities
-
-- Single-user local auth with automatic session bootstrap plus optional GitHub device/OAuth sign-in
-- Backend-advertised auth capabilities via `/api/auth/capabilities`
-- Durable SQLite-backed app metadata for sessions, projects, threads, preferences, and attachments
-- ACP session history used as the source of truth for chat replay, reasoning, tool activity, and usage
-- Streaming chat route with Copilot errors surfaced inline
-- Model listing and Copilot status endpoints
-- Copilot session inspection and deletion endpoints
-- Local file attachments stored on the Mac host
-- Hosted frontend default daemon URL injection for GitHub Pages
-- Service-worker cache fingerprinting so old app shells are invalidated on deploy
-- Forced PWA shell updates so fresh deployments take over immediately
-
 ## Data and state
-
-There are two persistence layers in this setup.
-
-### 1. App-owned metadata
 
 The daemon stores app-owned data under `APP_SUPPORT_DIR`, which defaults to:
 
@@ -70,27 +53,12 @@ The daemon stores app-owned data under `APP_SUPPORT_DIR`, which defaults to:
 
 Important paths include:
 
-- `data/assistant.sqlite` -- projects, threads, preferences, auth sessions, and attachment metadata
-- `media/` -- uploaded attachment files
-
-### 2. Copilot runtime state
+- `config/daemon.env` — stable daemon config used by auto-start installs
+- `logs/daemon.log` — persistent daemon log file
+- `data/assistant.sqlite` — projects, threads, preferences, auth sessions, and attachment metadata
+- `media/` — uploaded attachment files
 
 The daemon talks to Copilot through ACP (`copilot --acp --stdio`). Transcript history is replayed from ACP sessions when the client loads a thread, so the Copilot runtime remains the source of truth for message content while SQLite stores only app-owned metadata.
-
-## API surface
-
-The Rust daemon serves the routes the frontend depends on, including:
-
-- `/api/health`
-- `/api/auth/*`
-- `/api/projects`
-- `/api/threads`
-- `/api/chat/stream`
-- `/api/chat/abort`
-- `/api/attachments`
-- `/api/models`
-- `/api/copilot/status`
-- `/api/copilot/preferences`
 
 ## Getting started
 
@@ -106,45 +74,74 @@ pnpm install
 cp .env.example .env
 ```
 
-3. Configure the daemon:
+3. Run the daemon locally:
 
 ```bash
-# Single-user app auth
-APP_AUTH_MODE=local
-DAEMON_OWNER_LOGIN=daemon
-
-# Optional GitHub app auth
-# github-device needs GITHUB_CLIENT_ID
-# github-oauth also needs GITHUB_CLIENT_SECRET and GITHUB_CALLBACK_URL
-GITHUB_CLIENT_ID=...
-
-# Optional Copilot runtime overrides
-COPILOT_USE_LOGGED_IN_USER=true
-COPILOT_CLI_URL=
-COPILOT_GITHUB_TOKEN=
-
-# Optional remote/client access helpers
-PUBLIC_API_URL=
-TAILSCALE_API_URL=
-REMOTE_ACCESS_MODE=local
-SERVICE_ACCESS_TOKEN=
-CLIENT_DEFAULT_API_URL=
-EXPO_PUBLIC_SERVICE_ACCESS_TOKEN=
+cargo run --manifest-path apps/daemon/Cargo.toml --bin gcpa -- daemon run
 ```
 
-4. Start the daemon:
+You can override the port directly from the CLI when needed:
 
 ```bash
-HOST=0.0.0.0 cargo run --manifest-path apps/daemon/Cargo.toml
+cargo run --manifest-path apps/daemon/Cargo.toml --bin gcpa -- daemon run --port 4310
 ```
 
-5. Start the web client:
+4. Start the web client:
 
 ```bash
 pnpm dev:client:web
 ```
 
 This starts a small local static dev server that rebuilds the client when files change.
+
+## Install / restart / update story
+
+`gcpa` now has an explicit lifecycle model instead of ad-hoc shell commands:
+
+- Diagnose the local environment: `gcpa daemon doctor`
+- Show config/log/data paths: `gcpa daemon paths`
+- Install start-at-login service: `gcpa daemon service install`
+- Check status: `gcpa daemon service status`
+- Restart after config or binary changes: `gcpa daemon service restart`
+- Remove start-at-login service: `gcpa daemon service uninstall`
+
+The auto-start implementation uses the native user-level service manager for each platform:
+
+- macOS: `launchd` (`~/Library/LaunchAgents/...`)
+- Linux: `systemd --user` (`~/.config/systemd/user/...`)
+- Windows: Task Scheduler (login task + runner script under `APP_SUPPORT_DIR`)
+
+The default config file path is `APP_SUPPORT_DIR/config/daemon.env`. If it does not exist yet, `gcpa daemon service install` will create one from the current resolved settings so the background service has a stable config source.
+
+The current update flow is intentionally simple and explicit: replace the `gcpa` binary with a newer build/release, then run `gcpa daemon service restart`. The app Settings modal also shows the exact restart/update command hints returned by `/api/health`.
+
+## Hosted frontend deploy flow
+
+The same CLI can publish or update the hosted web UI in another repo:
+
+```bash
+gcpa ui deploy --repo OWNER/REPO --client-default-api-url https://your-daemon-url
+```
+
+What it does:
+
+- builds `apps/client`
+- creates the target repo if needed
+- syncs the built static app into the target repo’s `docs/` directory
+- pushes the commit to the chosen branch
+- configures GitHub Pages to serve from `BRANCH:/docs` (unless `--skip-pages-config` is used)
+
+That gives you a safe deployment path for an existing repo without wiping unrelated files outside `docs/`.
+
+## Runtime UX in the browser
+
+There is not a separate native tray/menu app in this build. Instead:
+
+- the browser/PWA is the primary user interface
+- the Settings modal shows daemon version, lifecycle mode, Copilot CLI detection, config/log paths, and the exact `gcpa` restart/update/deploy commands
+- connection settings still let the hosted frontend point at any daemon URL
+
+That keeps the product simple while still giving users a discoverable place to find lifecycle instructions.
 
 ## Notes and operational details
 
@@ -154,21 +151,10 @@ This starts a small local static dev server that rebuilds the client when files 
 - The frontend negotiates auth with the backend and creates a local session automatically in local mode.
 - For GitHub device-flow app auth, set `APP_AUTH_MODE=github-device` and `GITHUB_CLIENT_ID`.
 - For redirect-based GitHub OAuth app auth, set `APP_AUTH_MODE=github-oauth` plus `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `GITHUB_CALLBACK_URL`.
-- For hosted frontends such as GitHub Pages, set the repository Actions variable `CLIENT_DEFAULT_API_URL` to your Tailscale HTTPS URL so first load points at the daemon instead of `localhost`.
-- The client stores session tokens per daemon origin and auth config version, so switching daemon URLs or auth modes does not reuse stale sessions.
+- For hosted frontends such as GitHub Pages, set `CLIENT_DEFAULT_API_URL` to your Tailscale HTTPS URL so first load points at the daemon instead of `localhost`.
 - `TAILSCALE_API_URL` is the preferred static remote URL for this setup.
 - `REMOTE_ACCESS_MODE` controls how the daemon advertises itself in `/api/health` (`local`, `tailscale`, or `public`).
-- For direct Tailscale access, run the daemon with `HOST=0.0.0.0` and use `http://your-mac.tailnet-name.ts.net:4000`, or front it with `tailscale serve` for a stable HTTPS URL.
 
-## GitHub Pages frontend
+## PWA / Pages behavior
 
-The React web client is exported statically and deployed to GitHub Pages. The workflow in `.github/workflows/deploy-pages.yml` builds `apps/client` and publishes it to Pages on every push to `main`.
-
-The client is also configured as a PWA:
-
-- the app shell is cached after first load
-- the browser can install it like an app
-- the app can detect when an update is waiting
-- the UI can prompt the user to apply the update
-
-For hosted frontends, the user can still override the daemon URL at runtime in connection settings without rebuilding the frontend.
+The React web client is exported statically and deployed to GitHub Pages. The in-repo workflow in `.github/workflows/deploy-pages.yml` still builds `apps/client` and publishes it to Pages on every push to `main`, and `gcpa ui deploy` can publish the same UI to another repo’s `docs/` directory when you want a separate hosted frontend repo.

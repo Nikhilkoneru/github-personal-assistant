@@ -96,18 +96,3 @@ pub struct PromptCapabilities {
     pub embedded_context: bool,
 }
 
-/// Streamed session update from the agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionUpdate {
-    pub session_id: String,
-    pub update: SessionUpdatePayload,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionUpdatePayload {
-    pub session_update: String,
-    #[serde(flatten)]
-    pub data: serde_json::Value,
-}

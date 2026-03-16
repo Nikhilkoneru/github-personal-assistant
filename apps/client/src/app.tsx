@@ -1122,6 +1122,14 @@ export default function App() {
     copilotPreferences.approvalMode === 'approve-all'
       ? 'Shell, write, and other Copilot tool requests run without extra blocking.'
       : 'Read-style tools stay available, while shell and write actions are denied by default.';
+  const daemonRuntime = health?.runtime;
+  const daemonVersionLabel = daemonRuntime ? `v${daemonRuntime.version}` : 'Unknown';
+  const daemonServiceLabel = daemonRuntime
+    ? `${daemonRuntime.serviceManager}${daemonRuntime.serviceInstalled ? ' (auto-start on login)' : ' (manual launch)'}`
+    : 'Manual';
+  const copilotCliLabel = daemonRuntime?.copilot.found
+    ? daemonRuntime.copilot.version ?? daemonRuntime.copilot.path ?? 'Installed'
+    : 'Not found';
   const isSelectedChatStreaming = Boolean(selectedChat && streamingChatIds.has(selectedChat.id));
 
   // Auto-grow composer textarea
@@ -1172,6 +1180,21 @@ export default function App() {
           </select>
           <div className="helper-text">{savingApprovalMode ? 'Saving approval mode…' : approvalModeDescription}</div>
         </div>
+        {daemonRuntime ? (
+          <div className="settings-block">
+            <div className="status-grid">
+              <div className="status-item"><div className="status-label">Version</div><div className="status-value">{daemonVersionLabel}</div></div>
+              <div className="status-item"><div className="status-label">Lifecycle</div><div className="status-value">{daemonServiceLabel}</div></div>
+              <div className="status-item"><div className="status-label">Copilot CLI</div><div className="status-value">{copilotCliLabel}</div></div>
+            </div>
+            <div className="helper-text">Config: {daemonRuntime.configPath}</div>
+            <div className="helper-text">Logs: {daemonRuntime.logPath}</div>
+            <div className="helper-text">Restart: <code>{daemonRuntime.restartHint}</code></div>
+            <div className="helper-text">Status: <code>{daemonRuntime.statusHint}</code></div>
+            <div className="helper-text">Update: {daemonRuntime.updateHint}</div>
+            <div className="helper-text">Deploy UI: <code>{daemonRuntime.uiDeployHint}</code></div>
+          </div>
+        ) : null}
         {!isStandalone ? <div className="install-note">On iPhone or iPad, open the browser share menu and choose <strong>Add to Home Screen</strong>.</div> : null}
         <div className="modal-actions">
           {!isStandalone ? <button className="ghost-button install-cta" onClick={() => void handleInstallApp()}><InstallIcon />Install app</button> : null}

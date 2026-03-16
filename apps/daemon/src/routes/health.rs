@@ -3,6 +3,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
 
+use crate::runtime;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -11,8 +12,10 @@ pub fn router() -> Router<AppState> {
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = &state.config;
+    let runtime = runtime::build_runtime_info(config, &state.started_at);
+    let status = if runtime.copilot.found { "ok" } else { "degraded" };
     Json(json!({
-        "status": "ok",
+        "status": status,
         "copilotConfigured": config.is_copilot_configured(),
         "authConfigured": config.is_auth_configured(),
         "authMode": config.app_auth_mode,
@@ -22,5 +25,6 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "tailscaleApiUrl": config.tailscale_api_url,
         "remoteAccessMode": config.remote_access_mode,
         "remoteAccessConfigured": config.is_remote_access_configured(),
+        "runtime": runtime,
     }))
 }

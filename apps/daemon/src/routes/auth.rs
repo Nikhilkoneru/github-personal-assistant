@@ -5,7 +5,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::auth_middleware::{check_service_access, extract_bearer_token, get_session, require_session};
+use crate::auth_middleware::{check_service_access, extract_bearer_token, get_session};
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::store::auth_store;

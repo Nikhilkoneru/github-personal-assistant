@@ -5,7 +5,7 @@
   "scripts": {
     "dev:client": "pnpm --filter client start",
     "dev:client:web": "pnpm --filter client web",
-    "dev:daemon": "cargo run --manifest-path apps/daemon/Cargo.toml",
+    "dev:daemon": "cargo run --manifest-path apps/daemon/Cargo.toml --bin gcpa -- daemon run",
     "build:web": "pnpm --filter client export:web",
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",

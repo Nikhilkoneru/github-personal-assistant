@@ -1,6 +1,6 @@
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::routing::{delete, get, put};
+use axum::routing::{delete, get};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -60,7 +60,7 @@ async fn get_status(
 
     Ok(Json(json!({
         "status": {
-            "version": "1.0.0",
+            "version": crate::runtime::app_version(),
             "protocolVersion": 1,
             "connectionState": if connected { "connected" } else { "disconnected" },
         },

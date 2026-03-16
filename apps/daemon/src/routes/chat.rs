@@ -30,7 +30,7 @@ struct ChatStreamInput {
     prompt: String,
     model: Option<String>,
     reasoning_effort: Option<String>,
-    attachments: Option<Vec<String>>,
+    _attachments: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -42,9 +42,9 @@ struct AbortInput {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UserInputInput {
-    thread_id: String,
-    request_id: String,
-    answer: String,
+    _thread_id: String,
+    _request_id: String,
+    _answer: String,
 }
 
 async fn abort_chat(

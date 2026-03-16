@@ -34,8 +34,40 @@ export type AuthCapabilities = {
   signIn: AuthSignInCapabilities;
 };
 
+export type DaemonToolStatus = {
+  found: boolean;
+  path?: string;
+  version?: string;
+};
+
+export type DaemonRuntimeInfo = {
+  version: string;
+  platform: string;
+  arch: string;
+  pid: number;
+  startedAt: string;
+  executablePath: string;
+  configPath: string;
+  configFileExists: boolean;
+  logPath: string;
+  dataPath: string;
+  mediaPath: string;
+  serviceManager: 'launchd' | 'systemd' | 'task-scheduler' | 'manual' | string;
+  serviceName: string;
+  serviceDefinitionPath: string;
+  serviceInstalled: boolean;
+  controlSurface: string;
+  installHint: string;
+  restartHint: string;
+  statusHint: string;
+  logsHint: string;
+  updateHint: string;
+  uiDeployHint: string;
+  copilot: DaemonToolStatus;
+};
+
 export type ApiHealth = {
-  status: 'ok';
+  status: 'ok' | 'degraded';
   copilotConfigured: boolean;
   authConfigured: boolean;
   authMode: AppAuthMode;
@@ -45,6 +77,7 @@ export type ApiHealth = {
   tailscaleApiUrl?: string;
   remoteAccessMode: 'local' | 'tailscale' | 'public';
   remoteAccessConfigured: boolean;
+  runtime?: DaemonRuntimeInfo;
 };
 
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';

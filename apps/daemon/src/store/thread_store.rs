@@ -33,7 +33,7 @@ pub fn create_thread(
     reasoning_effort: Option<&str>,
 ) -> Option<ThreadSummary> {
     if let Some(pid) = project_id {
-        let conn = db.conn.lock().unwrap();
+        let conn = db.lock().ok()?;
         let exists: bool = conn
             .query_row(
                 "SELECT 1 FROM projects WHERE id = ?1 AND github_user_id = ?2",
@@ -51,28 +51,30 @@ pub fn create_thread(
     let actual_model = model.filter(|m| !m.is_empty()).unwrap_or(default_model);
     let actual_title = title.filter(|t| !t.is_empty()).unwrap_or("New chat");
 
-    let conn = db.conn.lock().unwrap();
+    let conn = db.lock().ok()?;
     conn.execute(
         "INSERT INTO threads (id, github_user_id, project_id, title, model, reasoning_effort, last_message_preview, copilot_session_id, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, ?8)",
         rusqlite::params![id, owner_id, project_id, actual_title, actual_model, reasoning_effort, now, now],
     )
-    .unwrap();
+    .ok()?;
     drop(conn);
 
     get_thread(db, owner_id, &id)
 }
 
 pub fn list_threads(db: &Database, owner_id: &str, project_id: Option<&str>) -> Vec<ThreadSummary> {
-    let conn = db.conn.lock().unwrap();
-    let mut stmt = conn
-        .prepare(
-            "SELECT t.id, t.title, t.project_id, p.name, t.model, t.reasoning_effort, t.updated_at, t.created_at, t.copilot_session_id, t.last_message_preview
-             FROM threads t LEFT JOIN projects p ON p.id = t.project_id
-             WHERE t.github_user_id = ?1 AND (?2 IS NULL OR t.project_id = ?2)
-             ORDER BY t.updated_at DESC",
-        )
-        .unwrap();
+    let Ok(conn) = db.lock() else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT t.id, t.title, t.project_id, p.name, t.model, t.reasoning_effort, t.updated_at, t.created_at, t.copilot_session_id, t.last_message_preview
+         FROM threads t LEFT JOIN projects p ON p.id = t.project_id
+         WHERE t.github_user_id = ?1 AND (?2 IS NULL OR t.project_id = ?2)
+         ORDER BY t.updated_at DESC",
+    ) else {
+        return Vec::new();
+    };
     stmt.query_map(rusqlite::params![owner_id, project_id], |row| {
         Ok(ThreadSummary {
             id: row.get(0)?,
@@ -87,13 +89,12 @@ pub fn list_threads(db: &Database, owner_id: &str, project_id: Option<&str>) -> 
             last_message_preview: row.get(9)?,
         })
     })
-    .unwrap()
-    .filter_map(|r| r.ok())
-    .collect()
+    .map(|rows| rows.filter_map(|row| row.ok()).collect())
+    .unwrap_or_default()
 }
 
 pub fn get_thread(db: &Database, owner_id: &str, thread_id: &str) -> Option<ThreadSummary> {
-    let conn = db.conn.lock().unwrap();
+    let conn = db.lock().ok()?;
     conn.query_row(
         "SELECT t.id, t.title, t.project_id, p.name, t.model, t.reasoning_effort, t.updated_at, t.created_at, t.copilot_session_id, t.last_message_preview
          FROM threads t LEFT JOIN projects p ON p.id = t.project_id
@@ -118,11 +119,12 @@ pub fn get_thread(db: &Database, owner_id: &str, thread_id: &str) -> Option<Thre
 }
 
 pub fn update_thread_session(db: &Database, thread_id: &str, session_id: &str) {
-    let conn = db.conn.lock().unwrap();
-    let _ = conn.execute(
-        "UPDATE threads SET copilot_session_id = ?1, updated_at = ?2 WHERE id = ?3",
-        rusqlite::params![session_id, now_iso(), thread_id],
-    );
+    if let Ok(conn) = db.lock() {
+        let _ = conn.execute(
+            "UPDATE threads SET copilot_session_id = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![session_id, now_iso(), thread_id],
+        );
+    }
 }
 
 pub fn update_thread_preview(db: &Database, thread_id: &str, preview: &str) {
@@ -132,11 +134,12 @@ pub fn update_thread_preview(db: &Database, thread_id: &str, preview: &str) {
     } else {
         single_line
     };
-    let conn = db.conn.lock().unwrap();
-    let _ = conn.execute(
-        "UPDATE threads SET last_message_preview = ?1, updated_at = ?2 WHERE id = ?3",
-        rusqlite::params![truncated, now_iso(), thread_id],
-    );
+    if let Ok(conn) = db.lock() {
+        let _ = conn.execute(
+            "UPDATE threads SET last_message_preview = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![truncated, now_iso(), thread_id],
+        );
+    }
 }
 
 pub fn update_thread(
@@ -159,7 +162,7 @@ pub fn update_thread(
     };
 
     if let Some(pid) = actual_project_id {
-        let conn = db.conn.lock().unwrap();
+        let conn = db.lock().ok()?;
         let exists: bool = conn
             .query_row(
                 "SELECT 1 FROM projects WHERE id = ?1 AND github_user_id = ?2",
@@ -172,7 +175,7 @@ pub fn update_thread(
         }
     }
 
-    let conn = db.conn.lock().unwrap();
+    let conn = db.lock().ok()?;
     let _ = conn.execute(
         "UPDATE threads SET project_id = ?1, model = ?2, reasoning_effort = ?3, updated_at = ?4 WHERE id = ?5 AND github_user_id = ?6",
         rusqlite::params![actual_project_id, actual_model, actual_reasoning, now_iso(), thread_id, owner_id],
@@ -183,9 +186,10 @@ pub fn update_thread(
 }
 
 pub fn rename_thread_if_placeholder(db: &Database, thread_id: &str, title: &str) {
-    let conn = db.conn.lock().unwrap();
-    let _ = conn.execute(
-        "UPDATE threads SET title = ?1, updated_at = ?2 WHERE id = ?3 AND (trim(title) = '' OR title = 'New chat')",
-        rusqlite::params![title, now_iso(), thread_id],
-    );
+    if let Ok(conn) = db.lock() {
+        let _ = conn.execute(
+            "UPDATE threads SET title = ?1, updated_at = ?2 WHERE id = ?3 AND (trim(title) = '' OR title = 'New chat')",
+            rusqlite::params![title, now_iso(), thread_id],
+        );
+    }
 }

@@ -291,6 +291,17 @@ export type ThreadDetail = ThreadSummary & {
   pendingPermissionRequests?: ChatPermissionRequest[];
 };
 
+export type ThreadMessageCursor = {
+  totalMessages: number;
+  digest: string;
+  lastMessageId?: string;
+};
+
+export type ThreadMessageSync = {
+  mode: 'full' | 'delta';
+  cursor: ThreadMessageCursor;
+};
+
 export type CreateThreadInput = {
   projectId?: string;
   title?: string;

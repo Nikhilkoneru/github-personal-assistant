@@ -11,6 +11,8 @@ import type {
   ProjectSummary,
   ReasoningEffort,
   ThreadDetail,
+  ThreadMessageCursor,
+  ThreadMessageSync,
   ThreadSummary,
 } from './lib/types.js';
 
@@ -57,6 +59,7 @@ type IOSNavigator = Navigator & {
 };
 
 const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const digestEncoder = new TextEncoder();
 const messageRoleRank: Record<ChatMessage['role'], number> = {
   system: 0,
   user: 1,
@@ -83,6 +86,51 @@ const createMessage = (role: ChatMessage['role'], content: string, attachments?:
   createdAt: new Date().toISOString(),
   ...(attachments && attachments.length > 0 ? { attachments } : {}),
 });
+const createReplayMessageId = (threadId: string, index: number) => `${threadId}-replay-${index}`;
+const updateDigest = (hash: number, value: string) => {
+  let next = hash;
+  for (const byte of digestEncoder.encode(value)) {
+    next ^= byte;
+    next = Math.imul(next, 0x01000193) >>> 0;
+  }
+  next ^= 0x1f;
+  return Math.imul(next, 0x01000193) >>> 0;
+};
+const buildThreadMessageCursor = (messages: ChatMessage[]): ThreadMessageCursor => {
+  let hash = 0x811c9dc5;
+  for (const message of messages) {
+    hash = updateDigest(hash, message.id);
+    hash = updateDigest(hash, message.role);
+    hash = updateDigest(hash, message.content);
+    hash = updateDigest(hash, String(message.attachments?.length ?? 0));
+    for (const attachment of message.attachments ?? []) {
+      hash = updateDigest(hash, attachment.id);
+      hash = updateDigest(hash, attachment.name);
+      hash = updateDigest(hash, attachment.mimeType);
+      hash = updateDigest(hash, String(attachment.size));
+      hash = updateDigest(hash, attachment.kind);
+      hash = updateDigest(hash, attachment.uploadedAt);
+    }
+    const toolActivities = message.metadata?.toolActivities ?? [];
+    hash = updateDigest(hash, String(toolActivities.length));
+    for (const activity of toolActivities) {
+      hash = updateDigest(hash, activity.id);
+      hash = updateDigest(hash, activity.toolName);
+      hash = updateDigest(hash, activity.status);
+      hash = updateDigest(hash, activity.startedAt);
+      hash = updateDigest(hash, activity.updatedAt);
+      hash = updateDigest(hash, activity.arguments ?? '');
+      hash = updateDigest(hash, activity.result ?? '');
+      hash = updateDigest(hash, activity.additionalContext ?? '');
+      hash = updateDigest(hash, activity.error ?? '');
+    }
+  }
+  return {
+    totalMessages: messages.length,
+    digest: hash.toString(16).padStart(8, '0'),
+    lastMessageId: messages.at(-1)?.id,
+  };
+};
 const upsertToolActivity = (activities: ChatToolActivity[] | undefined, nextActivity: ChatToolActivity) => {
   const current = activities ?? [];
   const existingIndex = current.findIndex((activity) => activity.id === nextActivity.id);
@@ -110,9 +158,23 @@ const mergeThreadIntoLocal = (thread: ThreadSummary, existing?: LocalChat): Loca
   pendingUserInputRequest: existing?.pendingUserInputRequest,
   pendingPermissionRequests: existing?.pendingPermissionRequests ?? [],
 });
-const mergeThreadDetailIntoLocal = (thread: ThreadDetail, existing?: LocalChat): LocalChat => ({
+const mergeMessages = (existing: ChatMessage[], incoming: ChatMessage[]) => {
+  const next = new Map(existing.map((message) => [message.id, message]));
+  for (const message of incoming) {
+    next.set(message.id, message);
+  }
+  return sortMessages(Array.from(next.values()));
+};
+const mergeThreadDetailIntoLocal = (
+  thread: ThreadDetail,
+  existing?: LocalChat,
+  messageSync?: ThreadMessageSync,
+): LocalChat => ({
   ...thread,
-  messages: sortMessages(thread.messages),
+  messages:
+    messageSync?.mode === 'delta' && existing?.hasLoadedMessages
+      ? mergeMessages(existing.messages, thread.messages)
+      : sortMessages(thread.messages),
   draftAttachments: existing?.draftAttachments ?? [],
   hasLoadedMessages: true,
   pendingUserInputRequest: thread.pendingUserInputRequest,
@@ -245,6 +307,8 @@ export default function App() {
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const chatsRef = useRef<LocalChat[]>([]);
+  chatsRef.current = chats;
   const selectedChatIdRef = useRef<string | null>(null);
   selectedChatIdRef.current = selectedChatId;
 
@@ -373,10 +437,10 @@ export default function App() {
     });
   }, []);
 
-  const upsertThreadDetail = useCallback((thread: ThreadDetail) => {
+  const upsertThreadDetail = useCallback((thread: ThreadDetail, messageSync?: ThreadMessageSync) => {
     setChats((current) => {
       const existing = current.find((chat) => chat.id === thread.id);
-      const next = mergeThreadDetailIntoLocal(thread, existing);
+      const next = mergeThreadDetailIntoLocal(thread, existing, messageSync);
       if (existing) {
         return current.map((chat) => (chat.id === thread.id ? next : chat));
       }
@@ -390,8 +454,10 @@ export default function App() {
         return null;
       }
 
-      const payload = await getThread(threadId, session.sessionToken);
-      upsertThreadDetail(payload.thread);
+      const existing = chatsRef.current.find((chat) => chat.id === threadId);
+      const cursor = existing?.hasLoadedMessages ? buildThreadMessageCursor(existing.messages) : undefined;
+      const payload = await getThread(threadId, session.sessionToken, cursor);
+      upsertThreadDetail(payload.thread, payload.messageSync);
       return payload.thread;
     },
     [session, upsertThreadDetail],
@@ -402,10 +468,10 @@ export default function App() {
       return null;
     }
     const payload = await createThread({}, session.sessionToken);
-    upsertThreadSummary(payload.thread);
+    upsertThreadDetail({ ...payload.thread, messages: [] });
     setSelectedChatId(payload.thread.id);
-    return loadThreadDetail(payload.thread.id);
-  }, [loadThreadDetail, session, upsertThreadSummary]);
+    return { ...payload.thread, messages: [] };
+  }, [session, upsertThreadDetail]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -585,16 +651,13 @@ export default function App() {
       try {
         const response = await updateThread(threadId, payload, session.sessionToken);
         upsertThreadSummary(response.thread);
-        if (selectedChatId === threadId) {
-          await loadThreadDetail(threadId);
-        }
       } catch (threadConfigError) {
         setError(threadConfigError instanceof Error ? threadConfigError.message : 'Unable to update chat settings.');
       } finally {
         setSavingThreadConfigId((current) => (current === threadId ? null : current));
       }
     },
-    [loadThreadDetail, selectedChatId, session, upsertThreadSummary],
+    [session, upsertThreadSummary],
   );
 
   const handleRespondToPendingInput = useCallback(
@@ -652,15 +715,14 @@ export default function App() {
     setError(null);
     try {
       const payload = await createThread(projectId ? { projectId } : {}, session.sessionToken);
-      upsertThreadSummary(payload.thread);
+      upsertThreadDetail({ ...payload.thread, messages: [] });
       setSelectedChatId(payload.thread.id);
-      await loadThreadDetail(payload.thread.id);
       setDraft('');
       setSidebarOpen(false);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : 'Unable to create chat.');
     }
-  }, [loadThreadDetail, session, upsertThreadSummary]);
+  }, [session, upsertThreadDetail]);
 
   const handleMoveChat = useCallback(
     async (chatId: string, projectId?: string | null) => {
@@ -681,9 +743,6 @@ export default function App() {
       try {
         const payload = await updateThread(chatId, { projectId: normalizedProjectId }, session.sessionToken);
         upsertThreadSummary(payload.thread);
-        if (selectedChatId === chatId) {
-          await loadThreadDetail(chatId);
-        }
       } catch (moveError) {
         setError(moveError instanceof Error ? moveError.message : 'Unable to move chat.');
       } finally {
@@ -692,7 +751,7 @@ export default function App() {
         setDragOverGroupId(null);
       }
     },
-    [chats, loadThreadDetail, selectedChatId, session, upsertThreadSummary],
+    [chats, session, upsertThreadSummary],
   );
 
   const handleCreateProject = useCallback(async (chatIdToMove?: string | null) => {
@@ -705,9 +764,6 @@ export default function App() {
       if (chatIdToMove) {
         const moved = await updateThread(chatIdToMove, { projectId: payload.project.id }, session.sessionToken);
         upsertThreadSummary(moved.thread);
-        if (selectedChatId === chatIdToMove) {
-          await loadThreadDetail(chatIdToMove);
-        }
       }
       setNewProjectName('');
     } catch (createError) {
@@ -715,9 +771,9 @@ export default function App() {
     } finally {
       setCreatingProject(false);
       setDraggedChatId(null);
-      setDragOverGroupId(null);
-    }
-  }, [loadThreadDetail, newProjectName, selectedChatId, session, upsertThreadSummary]);
+        setDragOverGroupId(null);
+      }
+  }, [newProjectName, session, upsertThreadSummary]);
 
   const handleSelectChat = useCallback(
     async (chatId: string) => {
@@ -844,11 +900,13 @@ export default function App() {
     }
 
     const prompt = draft.trim();
-    let assistantMessageId = createId();
     const chatId = selectedChat.id;
     const model = selectedChat.model || defaultModel;
     const reasoningEffort = selectedChat.reasoningEffort;
     const messageAttachments = selectedChat.draftAttachments;
+    let nextReplayMessageIndex = selectedChat.messages.length;
+    const userMessageId = createReplayMessageId(chatId, nextReplayMessageIndex++);
+    let assistantMessageId = createReplayMessageId(chatId, nextReplayMessageIndex++);
     let pendingDelta = '';
     let pendingReasoningDelta = '';
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -859,7 +917,7 @@ export default function App() {
         return;
       }
 
-      assistantMessageId = createId();
+      assistantMessageId = createReplayMessageId(chatId, nextReplayMessageIndex++);
       splitAssistantMessageOnNextText = false;
       updateChat(chatId, (chat) => ({
         ...chat,
@@ -927,7 +985,7 @@ export default function App() {
       pendingPermissionRequests: [],
       messages: sortMessages([
         ...chat.messages,
-        createMessage('user', prompt, messageAttachments),
+        { ...createMessage('user', prompt, messageAttachments), id: userMessageId },
         { id: assistantMessageId, role: 'assistant', content: '', createdAt: new Date().toISOString(), metadata: {} },
       ]),
       hasLoadedMessages: true,
@@ -1147,7 +1205,6 @@ export default function App() {
           }
         },
       );
-      await loadThreadDetail(chatId);
     } catch (sendError) {
       if (flushTimer !== null) {
         clearTimeout(flushTimer);
@@ -1177,7 +1234,7 @@ export default function App() {
       flushPendingDelta();
       setStreamingChatIds((prev) => { const next = new Set(prev); next.delete(chatId); return next; });
     }
-  }, [defaultModel, draft, loadThreadDetail, selectedChat, session, signOut, streamingChatIds, updateChat]);
+  }, [defaultModel, draft, selectedChat, session, signOut, streamingChatIds, updateChat]);
 
   const handleAbortStreaming = useCallback(async () => {
     if (!session || !selectedChat || !streamingChatIds.has(selectedChat.id)) {

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -17,7 +18,7 @@ use crate::store::{
     thread_store::{self, ThreadSummary},
 };
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatToolActivityResponse {
     id: String,
@@ -35,14 +36,14 @@ struct ChatToolActivityResponse {
     error: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatMessageMetadataResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_activities: Option<Vec<ChatToolActivityResponse>>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatMessageResponse {
     id: String,
@@ -53,6 +54,22 @@ struct ChatMessageResponse {
     attachments: Option<Vec<attachment_store::AttachmentSummary>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<ChatMessageMetadataResponse>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadMessageCursorResponse {
+    total_messages: usize,
+    digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_message_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadMessageSyncResponse {
+    mode: &'static str,
+    cursor: ThreadMessageCursorResponse,
 }
 
 #[derive(Serialize)]
@@ -79,6 +96,13 @@ pub fn router() -> Router<AppState> {
 #[serde(rename_all = "camelCase")]
 struct ListQuery {
     project_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadDetailQuery {
+    known_message_count: Option<usize>,
+    known_message_digest: Option<String>,
 }
 
 async fn list(
@@ -133,6 +157,7 @@ async fn get_detail(
     State(state): State<AppState>,
     headers: HeaderMap,
     axum::extract::Path(thread_id): axum::extract::Path<String>,
+    axum::extract::Query(query): axum::extract::Query<ThreadDetailQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let session = require_session(&headers, &state.db, &state.config)?;
     let thread = thread_store::get_thread(&state.db, &session.user_id, &thread_id)
@@ -140,6 +165,11 @@ async fn get_detail(
     let messages = load_thread_messages(&state, &thread)
         .await
         .map_err(|error| AppError::Internal(error.to_string()))?;
+    let (messages, message_sync) = sync_messages(
+        messages,
+        query.known_message_count,
+        query.known_message_digest.as_deref(),
+    );
     let (pending_user_input_request, pending_permission_requests) =
         load_pending_requests(&state, &thread).await;
 
@@ -149,7 +179,8 @@ async fn get_detail(
             messages,
             pending_user_input_request,
             pending_permission_requests,
-        }
+        },
+        "messageSync": message_sync,
     })))
 }
 
@@ -349,6 +380,107 @@ fn replayed_messages_to_chat_messages(
         .collect()
 }
 
+fn sync_messages(
+    mut messages: Vec<ChatMessageResponse>,
+    known_message_count: Option<usize>,
+    known_message_digest: Option<&str>,
+) -> (Vec<ChatMessageResponse>, ThreadMessageSyncResponse) {
+    let cursor = build_thread_message_cursor(&messages);
+    let mode = match (known_message_count, known_message_digest) {
+        (Some(count), Some(digest))
+            if count <= messages.len() && message_digest(&messages[..count]) == digest =>
+        {
+            messages = messages.split_off(count);
+            "delta"
+        }
+        _ => "full",
+    };
+
+    (messages, ThreadMessageSyncResponse { mode, cursor })
+}
+
+fn build_thread_message_cursor(messages: &[ChatMessageResponse]) -> ThreadMessageCursorResponse {
+    ThreadMessageCursorResponse {
+        total_messages: messages.len(),
+        digest: message_digest(messages),
+        last_message_id: messages.last().map(|message| message.id.clone()),
+    }
+}
+
+fn message_digest(messages: &[ChatMessageResponse]) -> String {
+    let mut hasher = Fnv32::default();
+    for message in messages {
+        hasher.push(&message.id);
+        hasher.push(&message.role);
+        hasher.push(&message.content);
+        hasher.push_number(message.attachments.as_ref().map_or(0, Vec::len));
+        if let Some(attachments) = message.attachments.as_ref() {
+            for attachment in attachments {
+                hasher.push(&attachment.id);
+                hasher.push(&attachment.name);
+                hasher.push(&attachment.mime_type);
+                hasher.push(&attachment.size.to_string());
+                hasher.push(&attachment.kind);
+                hasher.push(&attachment.uploaded_at);
+            }
+        }
+        let tool_activities = message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.tool_activities.as_ref());
+        hasher.push_number(tool_activities.map_or(0, Vec::len));
+        if let Some(tool_activities) = tool_activities {
+            for activity in tool_activities {
+                hasher.push(&activity.id);
+                hasher.push(&activity.tool_name);
+                hasher.push(&activity.status);
+                hasher.push(&activity.started_at);
+                hasher.push(&activity.updated_at);
+                hasher.push_optional(activity.arguments.as_deref());
+                hasher.push_optional(activity.result.as_deref());
+                hasher.push_optional(activity.additional_context.as_deref());
+                hasher.push_optional(activity.error.as_deref());
+            }
+        }
+    }
+    hasher.finish()
+}
+
+struct Fnv32 {
+    hash: u32,
+}
+
+impl Default for Fnv32 {
+    fn default() -> Self {
+        Self { hash: 0x811c9dc5 }
+    }
+}
+
+impl Fnv32 {
+    fn push(&mut self, value: &str) {
+        for byte in value.as_bytes() {
+            self.hash ^= u32::from(*byte);
+            self.hash = self.hash.wrapping_mul(0x0100_0193);
+        }
+        self.hash ^= 0x1f;
+        self.hash = self.hash.wrapping_mul(0x0100_0193);
+    }
+
+    fn push_optional(&mut self, value: Option<&str>) {
+        self.push(value.unwrap_or(""));
+    }
+
+    fn push_number(&mut self, value: usize) {
+        self.push(&value.to_string());
+    }
+
+    fn finish(self) -> String {
+        let mut output = String::with_capacity(8);
+        let _ = write!(&mut output, "{:08x}", self.hash);
+        output
+    }
+}
+
 fn tool_calls_to_activities(
     tool_calls: &[serde_json::Value],
     timestamp: &str,
@@ -436,4 +568,47 @@ async fn load_pending_requests(
         .collect();
 
     (pending_user_input, pending_permissions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(id: &str, content: &str) -> ChatMessageResponse {
+        ChatMessageResponse {
+            id: id.to_string(),
+            role: "assistant".to_string(),
+            content: content.to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            attachments: None,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn sync_messages_returns_delta_for_matching_prefix() {
+        let messages = vec![
+            message("thread-replay-0", "hello"),
+            message("thread-replay-1", "world"),
+        ];
+        let digest = message_digest(&messages[..1]);
+        let (delta, sync) = sync_messages(messages, Some(1), Some(&digest));
+
+        assert_eq!(sync.mode, "delta");
+        assert_eq!(sync.cursor.total_messages, 2);
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta[0].id, "thread-replay-1");
+    }
+
+    #[test]
+    fn sync_messages_falls_back_to_full_for_mismatched_prefix() {
+        let messages = vec![
+            message("thread-replay-0", "hello"),
+            message("thread-replay-1", "world"),
+        ];
+        let (full, sync) = sync_messages(messages, Some(1), Some("deadbeef"));
+
+        assert_eq!(sync.mode, "full");
+        assert_eq!(full.len(), 2);
+    }
 }

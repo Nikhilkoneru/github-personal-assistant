@@ -4,6 +4,8 @@ import type {
   ApiHealth,
   ChatStreamInput,
   ChatStreamEvent,
+  ThreadMessageCursor,
+  ThreadMessageSync,
   CopilotPreferences,
   CreateThreadInput,
   GitHubDeviceAuthPoll,
@@ -133,8 +135,19 @@ export const getThreads = (sessionToken?: string, projectId?: string) =>
     undefined,
     sessionToken,
   );
-export const getThread = (threadId: string, sessionToken?: string) =>
-  fetchJson<{ thread: ThreadDetail }>(`/api/threads/${threadId}`, undefined, sessionToken);
+export const getThread = (threadId: string, sessionToken?: string, cursor?: ThreadMessageCursor) => {
+  const params = new URLSearchParams();
+  if (cursor) {
+    params.set('knownMessageCount', String(cursor.totalMessages));
+    params.set('knownMessageDigest', cursor.digest);
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : '';
+  return fetchJson<{ thread: ThreadDetail; messageSync: ThreadMessageSync }>(
+    `/api/threads/${threadId}${suffix}`,
+    undefined,
+    sessionToken,
+  );
+};
 export const createThread = (payload: CreateThreadInput, sessionToken?: string) =>
   fetchJson<{ thread: ThreadSummary }>(
     '/api/threads',

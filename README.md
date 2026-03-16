@@ -2,6 +2,14 @@
 
 `gcpa` is a local GitHub Copilot companion that runs a Rust daemon on your machine and serves the web UI from the same process. You install one CLI, run one daemon, and open one same-origin app for chat, projects, threads, ACP tool activity, attachments, and device-auth flows.
 
+## Current product status
+
+`gcpa` should currently be treated as an **early beta**.
+
+- **macOS is the primary tested host platform today**
+- Linux and Windows release archives are produced, but macOS is the platform that has been exercised most heavily end-to-end so far
+- Expect active iteration around install UX, remote access, and mobile bandwidth optimizations while the product hardens
+
 ## Install the CLI
 
 The official distribution channel is **GitHub Releases**.
@@ -55,6 +63,25 @@ gcpa open
 The UI is served directly by the daemon, so the browser talks to the API over the same origin. There is no separate GitHub Pages deployment anymore.
 
 By default, the frontend uses the exact origin you opened in the browser. If you open a Tailscale URL, the frontend uses that Tailscale URL for API requests too.
+
+## Install the web UI as an app
+
+The bundled UI is a **Progressive Web App (PWA)**, so after the daemon is running you can install it like an app on desktop or mobile.
+
+General flow:
+
+1. Start `gcpa`
+2. Open the UI with `gcpa open` or your Tailscale `https://...ts.net` URL
+3. Use your browser's install/add-to-home-screen action
+
+Common install paths:
+
+- **Safari on macOS**: open the UI, then use **File -> Add to Dock**
+- **Chrome or Edge on macOS/Windows/Linux**: open the UI, then click the install icon in the address bar or use **Install app**
+- **Safari on iPhone/iPad**: open the UI, tap **Share**, then **Add to Home Screen**
+- **Chrome or Edge on Android**: open the UI, then use **Add to Home screen** or **Install app**
+
+After install, the app launches in its own window and reconnects to the same daemon origin you installed it from. If you installed it from a Tailscale URL, that device still needs to be connected to the same tailnet.
 
 Useful lifecycle commands:
 

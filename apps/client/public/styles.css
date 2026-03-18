@@ -280,6 +280,17 @@ button { cursor: pointer; }
   background: var(--bg);
 }
 
+.main-body {
+  min-height: 0;
+  min-width: 0;
+}
+
+.main-body--with-canvas {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 42%);
+  gap: 0;
+}
+
 .main-header {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
@@ -841,6 +852,19 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
   border: 1px solid var(--border);
 }
 
+.msg-canvas-link {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  background: rgba(56, 139, 253, 0.12);
+  color: var(--primary);
+  border: 1px solid rgba(56, 139, 253, 0.22);
+}
+
+.msg-canvas-link:hover {
+  background: rgba(56, 139, 253, 0.18);
+}
+
 /* Message footer */
 .msg-footer {
   display: flex;
@@ -873,6 +897,29 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
   max-width: 856px;
   margin: 0 auto;
   width: 100%;
+}
+
+.composer-targets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.composer-target {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.composer-target.active {
+  color: var(--text);
+  background: var(--surface);
+  border-color: rgba(56, 139, 253, 0.28);
 }
 
 .composer-bar {
@@ -938,6 +985,135 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
   padding: 0;
   flex-shrink: 0;
   transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.canvas-pane {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  border-left: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.canvas-pane-sidebar {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.canvas-pane-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.canvas-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.canvas-list-item {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.canvas-list-item.active {
+  border-color: rgba(56, 139, 253, 0.28);
+  background: rgba(56, 139, 253, 0.08);
+}
+
+.canvas-list-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-list-meta {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.canvas-editor-shell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.canvas-editor-header {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.canvas-editor-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.canvas-editor-header-copy {
+  min-width: 0;
+}
+
+.canvas-title-input {
+  margin: 12px 12px 0;
+}
+
+.canvas-editor {
+  flex: 1;
+  min-height: 260px;
+  margin: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.15);
+  color: var(--text);
+  padding: 14px;
+  resize: none;
+  outline: none;
+  font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  line-height: 1.55;
+}
+
+.canvas-editor:focus {
+  border-color: rgba(56, 139, 253, 0.4);
+}
+
+.canvas-footer {
+  padding: 0 12px 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.canvas-empty {
+  color: var(--muted);
+  font-size: 0.84rem;
+  padding: 12px;
+}
+
+.canvas-empty--editor {
+  padding: 24px 18px;
 }
 
 .composer-send:hover { transform: scale(1.05); }
@@ -1264,6 +1440,19 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
   .main-header { padding: 10px 12px; }
   .message-scroll { padding: 12px; }
   .composer { padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .main-body--with-canvas {
+    grid-template-columns: 1fr;
+  }
+  .canvas-pane {
+    grid-template-columns: 1fr;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    max-height: 50vh;
+  }
+  .canvas-pane-sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
   .status-grid { grid-template-columns: 1fr; }
   .modal-actions { flex-direction: column; }
   .modal-actions > * { width: 100%; }
@@ -1287,6 +1476,12 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
     flex: 1;
     max-width: none;
     min-width: 120px;
+  }
+  .canvas-pane-sidebar-head,
+  .canvas-editor-header,
+  .canvas-footer,
+  .composer-targets {
+    flex-wrap: wrap;
   }
 }
 

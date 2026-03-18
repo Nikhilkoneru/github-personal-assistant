@@ -247,6 +247,28 @@ export type ChatPermissionRequest = {
   createdAt: string;
 };
 
+export type CanvasKind = 'document' | 'code' | 'notes';
+
+export type CanvasSelection = {
+  start: number;
+  end: number;
+  text: string;
+};
+
+export type CanvasArtifact = {
+  id: string;
+  threadId: string;
+  title: string;
+  kind: CanvasKind | string;
+  content: string;
+  createdByUserMessageIndex?: number;
+  lastUpdatedByUserMessageIndex?: number;
+  createdAt: string;
+  updatedAt: string;
+  revisionCount: number;
+  latestRevisionNumber: number;
+};
+
 export type ChatMessageMetadata = {
   sessionMessageId?: string;
   reasoning?: string;
@@ -324,6 +346,14 @@ export type ChatStreamInput = {
   model?: string;
   reasoningEffort?: ReasoningEffort;
   attachments?: string[];
+  canvas?: {
+    mode: 'chat' | 'create' | 'update';
+    canvasId?: string;
+    title?: string;
+    kind?: CanvasKind | string;
+    currentContent?: string;
+    selection?: CanvasSelection;
+  };
 };
 
 export type ChatStreamEvent =

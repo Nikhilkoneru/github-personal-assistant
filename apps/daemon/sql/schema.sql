@@ -101,6 +101,31 @@ CREATE TABLE IF NOT EXISTS message_attachment_set_items (
   PRIMARY KEY (message_attachment_set_id, attachment_id)
 );
 
+CREATE TABLE IF NOT EXISTS canvases (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_by_user_message_index INTEGER,
+  last_updated_by_user_message_index INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_canvases_thread ON canvases(thread_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS canvas_revisions (
+  id TEXT PRIMARY KEY,
+  canvas_id TEXT NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+  revision_number INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  source_user_message_index INTEGER,
+  UNIQUE(canvas_id, revision_number)
+);
+CREATE INDEX IF NOT EXISTS idx_canvas_revisions_canvas
+  ON canvas_revisions(canvas_id, revision_number DESC);
+
 CREATE TABLE IF NOT EXISTS app_preferences (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,

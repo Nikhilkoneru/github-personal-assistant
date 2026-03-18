@@ -2,6 +2,7 @@ import type {
   AttachmentSummary,
   AuthCapabilities,
   ApiHealth,
+  CanvasArtifact,
   ChatStreamInput,
   ChatStreamEvent,
   ThreadMessageCursor,
@@ -330,6 +331,51 @@ export const respondToPermissionRequest = (payload: { threadId: string; requestI
     '/api/chat/permission',
     {
       method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    sessionToken,
+  );
+
+export const getCanvases = (threadId: string, sessionToken?: string) =>
+  fetchJson<{ canvases: CanvasArtifact[] }>(
+    `/api/threads/${threadId}/canvases`,
+    undefined,
+    sessionToken,
+  );
+
+export const createCanvas = (
+  threadId: string,
+  payload: {
+    title: string;
+    kind: string;
+    content?: string;
+    sourceUserMessageIndex?: number;
+  },
+  sessionToken?: string,
+) =>
+  fetchJson<{ canvas: CanvasArtifact }>(
+    `/api/threads/${threadId}/canvases`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    sessionToken,
+  );
+
+export const updateCanvas = (
+  threadId: string,
+  canvasId: string,
+  payload: {
+    title?: string;
+    content?: string;
+    sourceUserMessageIndex?: number;
+  },
+  sessionToken?: string,
+) =>
+  fetchJson<{ canvas: CanvasArtifact }>(
+    `/api/threads/${threadId}/canvases/${canvasId}`,
+    {
+      method: 'PATCH',
       body: JSON.stringify(payload),
     },
     sessionToken,

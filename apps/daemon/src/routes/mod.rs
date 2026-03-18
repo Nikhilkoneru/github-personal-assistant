@@ -1,5 +1,6 @@
 pub mod attachments;
 pub mod auth;
+pub mod canvases;
 pub mod chat;
 pub mod copilot_routes;
 pub mod health;

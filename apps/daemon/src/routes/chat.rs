@@ -33,6 +33,26 @@ struct ChatStreamInput {
     model: Option<String>,
     reasoning_effort: Option<String>,
     attachments: Option<Vec<String>>,
+    canvas: Option<CanvasPromptContext>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasSelectionInput {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasPromptContext {
+    mode: String,
+    canvas_id: Option<String>,
+    title: Option<String>,
+    kind: Option<String>,
+    current_content: Option<String>,
+    selection: Option<CanvasSelectionInput>,
 }
 
 #[derive(Deserialize)]
@@ -211,7 +231,7 @@ async fn stream_chat(
     .await?;
     thread_store::update_thread_preview(&state.db, &thread.id, &prompt).await?;
 
-    let prompt_content = build_prompt_content(&prompt, &attachments)?;
+    let prompt_content = build_prompt_content(&prompt, &attachments, body.canvas.as_ref())?;
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(256);
     let state_clone = state.clone();
@@ -412,8 +432,10 @@ async fn stream_chat(
 fn build_prompt_content(
     prompt: &str,
     attachments: &[attachment_store::AttachmentRecord],
+    canvas: Option<&CanvasPromptContext>,
 ) -> Result<Vec<serde_json::Value>, AppError> {
-    let mut content = vec![json!({ "type": "text", "text": prompt })];
+    let canvas_prompt = build_canvas_prompt(prompt, canvas);
+    let mut content = vec![json!({ "type": "text", "text": canvas_prompt })];
 
     for attachment in attachments {
         let bytes = std::fs::read(&attachment.file_path).map_err(|error| {
@@ -459,6 +481,75 @@ fn build_prompt_content(
     }
 
     Ok(content)
+}
+
+fn build_canvas_prompt(prompt: &str, canvas: Option<&CanvasPromptContext>) -> String {
+    let Some(canvas) = canvas else {
+        return prompt.to_string();
+    };
+
+    let title = canvas.title.as_deref().unwrap_or("Untitled canvas");
+    let kind = canvas.kind.as_deref().unwrap_or("document");
+    let current_content = canvas.current_content.as_deref().unwrap_or("");
+    let identifier = canvas
+        .canvas_id
+        .as_deref()
+        .map(|canvas_id| format!(" (id: {canvas_id})"))
+        .unwrap_or_default();
+
+    match canvas.mode.as_str() {
+        "create" => format!(
+            "You are creating content for a {kind} canvas titled \"{title}\"{identifier}.\n\
+Return only the canvas content. Do not add commentary, prefaces, or markdown fences unless the content itself requires them.\n\n\
+User request:\n{prompt}"
+        ),
+        "update" => {
+            if let Some(selection) = canvas.selection.as_ref() {
+                format!(
+                    "You are editing the selected portion of a {kind} canvas titled \"{title}\"{identifier}.\n\
+Current canvas content:\n<<<CANVAS\n{current_content}\nCANVAS\n\n\
+Selected range: {start}-{end}\n\
+Selected text:\n<<<SELECTION\n{selection_text}\nSELECTION\n\n\
+User request:\n{prompt}\n\n\
+Return only the replacement text for the selected range. Do not add commentary or markdown fences.",
+                    start = selection.start,
+                    end = selection.end,
+                    selection_text = selection.text
+                )
+            } else {
+                format!(
+                    "You are revising a {kind} canvas titled \"{title}\"{identifier}.\n\
+Current canvas content:\n<<<CANVAS\n{current_content}\nCANVAS\n\n\
+User request:\n{prompt}\n\n\
+Return the full updated canvas content only. Do not add commentary or markdown fences."
+                )
+            }
+        }
+        "chat" => {
+            if let Some(selection) = canvas.selection.as_ref() {
+                format!(
+                    "{prompt}\n\n\
+Additional context from the currently open canvas titled \"{title}\" ({kind}){identifier}:\n\
+Selected range: {start}-{end}\n\
+Selected text:\n<<<SELECTION\n{selection_text}\nSELECTION\n\n\
+Use that as context, but answer normally in chat.",
+                    start = selection.start,
+                    end = selection.end,
+                    selection_text = selection.text
+                )
+            } else if current_content.is_empty() {
+                prompt.to_string()
+            } else {
+                format!(
+                    "{prompt}\n\n\
+Additional context from the currently open canvas titled \"{title}\" ({kind}){identifier}:\n\
+<<<CANVAS\n{current_content}\nCANVAS\n\n\
+Use that as context, but answer normally in chat."
+                )
+            }
+        }
+        _ => prompt.to_string(),
+    }
 }
 
 fn make_event(data: &serde_json::Value) -> Event {

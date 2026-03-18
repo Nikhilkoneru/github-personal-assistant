@@ -262,6 +262,8 @@ pub mod threads {
         Attachments,
         #[sea_orm(has_many = "super::message_attachment_sets::Entity")]
         MessageAttachmentSets,
+        #[sea_orm(has_many = "super::canvases::Entity")]
+        Canvases,
     }
 
     impl Related<super::users::Entity> for Entity {
@@ -285,6 +287,12 @@ pub mod threads {
     impl Related<super::message_attachment_sets::Entity> for Entity {
         fn to() -> RelationDef {
             Relation::MessageAttachmentSets.def()
+        }
+    }
+
+    impl Related<super::canvases::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::Canvases.def()
         }
     }
 
@@ -352,6 +360,89 @@ pub mod attachments {
     impl Related<super::message_attachment_set_items::Entity> for Entity {
         fn to() -> RelationDef {
             Relation::MessageAttachmentSetItems.def()
+        }
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod canvases {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "canvases")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub thread_id: String,
+        pub title: String,
+        pub kind: String,
+        pub content: String,
+        pub created_by_user_message_index: Option<i64>,
+        pub last_updated_by_user_message_index: Option<i64>,
+        pub created_at: String,
+        pub updated_at: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {
+        #[sea_orm(
+            belongs_to = "super::threads::Entity",
+            from = "Column::ThreadId",
+            to = "super::threads::Column::Id",
+            on_update = "NoAction",
+            on_delete = "Cascade"
+        )]
+        Thread,
+        #[sea_orm(has_many = "super::canvas_revisions::Entity")]
+        CanvasRevisions,
+    }
+
+    impl Related<super::threads::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::Thread.def()
+        }
+    }
+
+    impl Related<super::canvas_revisions::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::CanvasRevisions.def()
+        }
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod canvas_revisions {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "canvas_revisions")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: String,
+        pub canvas_id: String,
+        pub revision_number: i64,
+        pub content: String,
+        pub created_at: String,
+        pub source_user_message_index: Option<i64>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {
+        #[sea_orm(
+            belongs_to = "super::canvases::Entity",
+            from = "Column::CanvasId",
+            to = "super::canvases::Column::Id",
+            on_update = "NoAction",
+            on_delete = "Cascade"
+        )]
+        Canvas,
+    }
+
+    impl Related<super::canvases::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::Canvas.def()
         }
     }
 

@@ -1,9 +1,11 @@
-import type { ChatMessage, ChatToolActivity } from '../lib/types.js';
+import type { CanvasArtifact, ChatMessage, ChatToolActivity } from '../lib/types.js';
 import { MarkdownContent } from './markdown-content.js';
 
 type MessageBubbleProps = {
   message: ChatMessage;
   isStreaming?: boolean;
+  canvasReferences?: CanvasArtifact[];
+  onOpenCanvas?: (canvasId: string) => void;
 };
 
 const formatTime = (value: string) => new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -34,7 +36,7 @@ const summarizeToolActivity = (activity: ChatToolActivity) => {
   return toolStatusLabels[activity.status];
 };
 
-export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, canvasReferences, onOpenCanvas }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const isError = message.role === 'error';
   const isAssistant = message.role === 'assistant';
@@ -187,6 +189,21 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
           <div className="msg-attachments">
             {message.attachments.map((attachment) => (
               <span key={attachment.id} className="msg-attachment">{attachment.name}</span>
+            ))}
+          </div>
+        ) : null}
+
+        {canvasReferences?.length ? (
+          <div className="msg-attachments">
+            {canvasReferences.map((canvas) => (
+              <button
+                key={canvas.id}
+                type="button"
+                className="msg-canvas-link"
+                onClick={() => onOpenCanvas?.(canvas.id)}
+              >
+                Open canvas: {canvas.title}
+              </button>
             ))}
           </div>
         ) : null}

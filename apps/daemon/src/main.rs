@@ -316,6 +316,7 @@ async fn serve(config: Config, started_at: String) -> anyhow::Result<()> {
         .merge(routes::auth::router())
         .merge(routes::projects::router())
         .merge(routes::threads::router())
+        .merge(routes::canvases::router())
         .merge(routes::models::router())
         .merge(routes::copilot_routes::router())
         .merge(routes::attachments::router())

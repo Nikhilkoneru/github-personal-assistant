@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AttachmentSummary,
   ApiHealth,
+  CanvasArtifact,
+  CanvasSelection,
   ChatMessage,
   ChatPermissionRequest,
   ChatToolActivity,
@@ -16,11 +18,14 @@ import type {
   ThreadSummary,
 } from './lib/types.js';
 
+import { CanvasPane } from './components/canvas-pane.js';
 import { MessageBubble } from './components/message-bubble.js';
 import {
   abortChat,
+  createCanvas,
   createProject,
   createThread,
+  getCanvases,
   getCopilotPreferences,
   getHealth,
   getModels,
@@ -30,6 +35,7 @@ import {
   getThread,
   getThreads,
   streamChat,
+  updateCanvas,
   updateProject,
   updateThread,
   updateCopilotPreferences,
@@ -186,6 +192,25 @@ const trimToNull = (value: string) => {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 };
+const explicitCanvasIntent = (prompt: string) => /\b(?:use|open|create|start)\s+(?:a\s+)?canvas\b/i.test(prompt);
+const stripCanvasPreamble = (prompt: string) =>
+  prompt
+    .replace(/\b(?:please\s+)?(?:use|open|create|start)\s+(?:a\s+)?canvas\b[:,-]?\s*/i, '')
+    .trim();
+const suggestCanvasTitle = (prompt: string, existingCount: number) => {
+  const candidate = stripCanvasPreamble(prompt).replace(/\s+/g, ' ').trim();
+  if (!candidate) {
+    return `Canvas ${existingCount + 1}`;
+  }
+  return candidate.length > 48 ? `${candidate.slice(0, 48).trimEnd()}…` : candidate;
+};
+const replaceCanvasSelection = (content: string, selection: CanvasSelection | null, replacement: string) => {
+  if (!selection) {
+    return replacement;
+  }
+  return `${content.slice(0, selection.start)}${replacement}${content.slice(selection.end)}`;
+};
+const countUserMessages = (messages: ChatMessage[]) => messages.filter((message) => message.role === 'user').length;
 
 function SettingsIcon() {
   return (
@@ -317,6 +342,12 @@ export default function App() {
   const [respondingToUserInputId, setRespondingToUserInputId] = useState<string | null>(null);
   const [respondingToPermissionId, setRespondingToPermissionId] = useState<string | null>(null);
   const [userInputDrafts, setUserInputDrafts] = useState<Record<string, string>>({});
+  const [canvasesByThread, setCanvasesByThread] = useState<Record<string, CanvasArtifact[]>>({});
+  const [activeCanvasIdByThread, setActiveCanvasIdByThread] = useState<Record<string, string | null>>({});
+  const [canvasPaneOpenByThread, setCanvasPaneOpenByThread] = useState<Record<string, boolean>>({});
+  const [canvasSelectionByThread, setCanvasSelectionByThread] = useState<Record<string, CanvasSelection | null>>({});
+  const [composerTarget, setComposerTarget] = useState<'chat' | 'canvas'>('chat');
+  const [savingCanvasId, setSavingCanvasId] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -361,6 +392,11 @@ export default function App() {
       setModels([]);
       setChats([]);
       setSelectedChatId(null);
+      setCanvasesByThread({});
+      setActiveCanvasIdByThread({});
+      setCanvasPaneOpenByThread({});
+      setCanvasSelectionByThread({});
+      setComposerTarget('chat');
       setDraft('');
       setNewProjectWorkspacePath('');
       setGeneralChatWorkspaceDraft('');
@@ -474,6 +510,58 @@ export default function App() {
     });
   }, []);
 
+  const replaceThreadCanvases = useCallback((threadId: string, canvases: CanvasArtifact[]) => {
+    setCanvasesByThread((current) => ({ ...current, [threadId]: canvases }));
+    setActiveCanvasIdByThread((current) => {
+      const existing = current[threadId];
+      const nextActiveId =
+        existing && canvases.some((canvas) => canvas.id === existing)
+          ? existing
+          : canvases[0]?.id ?? null;
+      return { ...current, [threadId]: nextActiveId };
+    });
+  }, []);
+
+  const upsertCanvasForThread = useCallback((threadId: string, canvas: CanvasArtifact) => {
+    setCanvasesByThread((current) => {
+      const existing = current[threadId] ?? [];
+      const next = existing.some((item) => item.id === canvas.id)
+        ? existing.map((item) => (item.id === canvas.id ? canvas : item))
+        : [canvas, ...existing];
+      return {
+        ...current,
+        [threadId]: [...next].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+      };
+    });
+  }, []);
+
+  const removeCanvasForThread = useCallback((threadId: string, canvasId: string) => {
+    setCanvasesByThread((current) => ({
+      ...current,
+      [threadId]: (current[threadId] ?? []).filter((canvas) => canvas.id !== canvasId),
+    }));
+    setActiveCanvasIdByThread((current) => ({
+      ...current,
+      [threadId]: current[threadId] === canvasId ? null : current[threadId] ?? null,
+    }));
+    setCanvasSelectionByThread((current) => ({
+      ...current,
+      [threadId]: null,
+    }));
+  }, []);
+
+  const loadThreadCanvases = useCallback(
+    async (threadId: string) => {
+      if (!session) {
+        return [];
+      }
+      const payload = await getCanvases(threadId, session.sessionToken);
+      replaceThreadCanvases(threadId, payload.canvases);
+      return payload.canvases;
+    },
+    [replaceThreadCanvases, session],
+  );
+
   const loadThreadDetail = useCallback(
     async (threadId: string) => {
       if (!session) {
@@ -482,11 +570,14 @@ export default function App() {
 
       const existing = chatsRef.current.find((chat) => chat.id === threadId);
       const cursor = existing?.hasLoadedMessages ? buildThreadMessageCursor(existing.messages) : undefined;
-      const payload = await getThread(threadId, session.sessionToken, cursor);
+      const [payload] = await Promise.all([
+        getThread(threadId, session.sessionToken, cursor),
+        loadThreadCanvases(threadId),
+      ]);
       upsertThreadDetail(payload.thread, payload.messageSync);
       return payload.thread;
     },
-    [session, upsertThreadDetail],
+    [loadThreadCanvases, session, upsertThreadDetail],
   );
 
   const ensureInitialThread = useCallback(async () => {
@@ -495,9 +586,10 @@ export default function App() {
     }
     const payload = await createThread({}, session.sessionToken);
     upsertThreadDetail({ ...payload.thread, messages: [] });
+    replaceThreadCanvases(payload.thread.id, []);
     setSelectedChatId(payload.thread.id);
     return { ...payload.thread, messages: [] };
-  }, [session, upsertThreadDetail]);
+  }, [replaceThreadCanvases, session, upsertThreadDetail]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -559,6 +651,33 @@ export default function App() {
   }, [isRestoring, load]);
 
   const selectedChat = useMemo(() => chats.find((chat) => chat.id === selectedChatId) ?? chats[0] ?? null, [chats, selectedChatId]);
+  const selectedCanvases = useMemo(
+    () => (selectedChat ? canvasesByThread[selectedChat.id] ?? [] : []),
+    [canvasesByThread, selectedChat],
+  );
+  const activeCanvasId = selectedChat ? activeCanvasIdByThread[selectedChat.id] ?? selectedCanvases[0]?.id ?? null : null;
+  const activeCanvas = useMemo(
+    () => selectedCanvases.find((canvas) => canvas.id === activeCanvasId) ?? selectedCanvases[0] ?? null,
+    [activeCanvasId, selectedCanvases],
+  );
+  const canvasPaneOpen = selectedChat ? canvasPaneOpenByThread[selectedChat.id] ?? false : false;
+  const canvasSelection = selectedChat ? canvasSelectionByThread[selectedChat.id] ?? null : null;
+  const canvasReferencesByUserMessageIndex = useMemo(() => {
+    const next = new Map<number, CanvasArtifact[]>();
+    for (const canvas of selectedCanvases) {
+      const indices = new Set<number>();
+      if (typeof canvas.createdByUserMessageIndex === 'number') {
+        indices.add(canvas.createdByUserMessageIndex);
+      }
+      if (typeof canvas.lastUpdatedByUserMessageIndex === 'number') {
+        indices.add(canvas.lastUpdatedByUserMessageIndex);
+      }
+      for (const index of indices) {
+        next.set(index, [...(next.get(index) ?? []), canvas]);
+      }
+    }
+    return next;
+  }, [selectedCanvases]);
   const orderedChats = useMemo(() => [...chats].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)), [chats]);
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const workspaceGroups = useMemo<WorkspaceGroup[]>(
@@ -792,13 +911,16 @@ export default function App() {
     try {
       const payload = await createThread(projectId ? { projectId } : {}, session.sessionToken);
       upsertThreadDetail({ ...payload.thread, messages: [] });
+      replaceThreadCanvases(payload.thread.id, []);
+      setCanvasPaneOpenByThread((current) => ({ ...current, [payload.thread.id]: false }));
+      setCanvasSelectionByThread((current) => ({ ...current, [payload.thread.id]: null }));
       setSelectedChatId(payload.thread.id);
       setDraft('');
       setSidebarOpen(false);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : 'Unable to create chat.');
     }
-  }, [session, upsertThreadDetail]);
+  }, [replaceThreadCanvases, session, upsertThreadDetail]);
 
   const handleMoveChat = useCallback(
     async (chatId: string, projectId?: string | null) => {
@@ -874,6 +996,118 @@ export default function App() {
     },
     [chats, loadThreadDetail],
   );
+
+  const handleOpenCanvas = useCallback(
+    (canvasId?: string | null) => {
+      if (!selectedChat) {
+        return;
+      }
+      setCanvasPaneOpenByThread((current) => ({ ...current, [selectedChat.id]: true }));
+      if (canvasId) {
+        setActiveCanvasIdByThread((current) => ({ ...current, [selectedChat.id]: canvasId }));
+      } else if (selectedCanvases[0]) {
+        setActiveCanvasIdByThread((current) => ({ ...current, [selectedChat.id]: current[selectedChat.id] ?? selectedCanvases[0].id }));
+      }
+      setComposerTarget('canvas');
+    },
+    [selectedChat, selectedCanvases],
+  );
+
+  const handleCloseCanvas = useCallback(() => {
+    if (!selectedChat) {
+      return;
+    }
+    setCanvasPaneOpenByThread((current) => ({ ...current, [selectedChat.id]: false }));
+    setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: null }));
+    setComposerTarget('chat');
+  }, [selectedChat]);
+
+  const handleCreateBlankCanvas = useCallback(async () => {
+    if (!session || !selectedChat) {
+      return;
+    }
+    setError(null);
+    try {
+      const payload = await createCanvas(
+        selectedChat.id,
+        {
+          title: `Canvas ${selectedCanvases.length + 1}`,
+          kind: 'document',
+          content: '',
+        },
+        session.sessionToken,
+      );
+      upsertCanvasForThread(selectedChat.id, payload.canvas);
+      setActiveCanvasIdByThread((current) => ({ ...current, [selectedChat.id]: payload.canvas.id }));
+      setCanvasPaneOpenByThread((current) => ({ ...current, [selectedChat.id]: true }));
+      setComposerTarget('canvas');
+    } catch (canvasError) {
+      setError(canvasError instanceof Error ? canvasError.message : 'Unable to create canvas.');
+    }
+  }, [selectedCanvases.length, selectedChat, session, upsertCanvasForThread]);
+
+  const handleCanvasTitleChange = useCallback((canvasId: string, title: string) => {
+    if (!selectedChat) {
+      return;
+    }
+    setCanvasesByThread((current) => ({
+      ...current,
+      [selectedChat.id]: (current[selectedChat.id] ?? []).map((canvas) =>
+        canvas.id === canvasId ? { ...canvas, title, updatedAt: new Date().toISOString() } : canvas,
+      ),
+    }));
+  }, [selectedChat]);
+
+  const handleCanvasContentChange = useCallback((canvasId: string, content: string) => {
+    if (!selectedChat) {
+      return;
+    }
+    setCanvasesByThread((current) => ({
+      ...current,
+      [selectedChat.id]: (current[selectedChat.id] ?? []).map((canvas) =>
+        canvas.id === canvasId ? { ...canvas, content, updatedAt: new Date().toISOString() } : canvas,
+      ),
+    }));
+  }, [selectedChat]);
+
+  const handleCanvasSelectionChange = useCallback((canvasId: string, nextSelection: CanvasSelection | null) => {
+    if (!selectedChat || activeCanvasId !== canvasId) {
+      return;
+    }
+    setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: nextSelection }));
+  }, [activeCanvasId, selectedChat]);
+
+  const handlePersistCanvas = useCallback(
+    async (canvasId: string, title: string, content: string) => {
+      if (!session || !selectedChat || !canvasId || !title.trim()) {
+        return;
+      }
+      setSavingCanvasId(canvasId);
+      setError(null);
+      try {
+        const payload = await updateCanvas(
+          selectedChat.id,
+          canvasId,
+          { title: title.trim(), content },
+          session.sessionToken,
+        );
+        upsertCanvasForThread(selectedChat.id, payload.canvas);
+      } catch (canvasError) {
+        setError(canvasError instanceof Error ? canvasError.message : 'Unable to save canvas.');
+      } finally {
+        setSavingCanvasId((current) => (current === canvasId ? null : current));
+      }
+    },
+    [selectedChat, session, upsertCanvasForThread],
+  );
+
+  const handleCopyCanvas = useCallback(async (canvas: CanvasArtifact) => {
+    try {
+      await navigator.clipboard.writeText(canvas.content);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : 'Unable to copy canvas content.');
+    }
+  }, []);
 
   const handleChatDragStart = useCallback((chatId: string) => {
     setDraggedChatId(chatId);
@@ -987,6 +1221,34 @@ export default function App() {
     const model = selectedChat.model || defaultModel;
     const reasoningEffort = selectedChat.reasoningEffort;
     const messageAttachments = selectedChat.draftAttachments;
+    const userMessageIndex = countUserMessages(selectedChat.messages);
+    const wantsCanvasOutput = explicitCanvasIntent(prompt) || (composerTarget === 'canvas' && (activeCanvas !== null || canvasPaneOpen));
+    const canvasMode =
+      wantsCanvasOutput ? (activeCanvas ? 'update' : 'create') : canvasPaneOpen && activeCanvas ? 'chat' : null;
+    const canvasSelectionForSend = wantsCanvasOutput && activeCanvas ? canvasSelection : canvasPaneOpen ? canvasSelection : null;
+    const baseCanvas = activeCanvas;
+    const tempCanvasId = canvasMode === 'create' ? `temp-canvas-${createId()}` : null;
+    const tempCanvas: CanvasArtifact | null =
+      tempCanvasId
+        ? {
+            id: tempCanvasId,
+            threadId: chatId,
+            title: suggestCanvasTitle(prompt, selectedCanvases.length),
+            kind: 'document',
+            content: '',
+            createdByUserMessageIndex: userMessageIndex,
+            lastUpdatedByUserMessageIndex: userMessageIndex,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            revisionCount: 0,
+            latestRevisionNumber: 0,
+          }
+        : null;
+    const canvasTarget = baseCanvas ?? tempCanvas;
+    const baseCanvasContent = baseCanvas?.content ?? '';
+    let streamedCanvasOutput = '';
+    let didAbort = false;
+    let didFail = false;
     let nextReplayMessageIndex = selectedChat.messages.length;
     const userMessageId = createReplayMessageId(chatId, nextReplayMessageIndex++);
     let assistantMessageId = createReplayMessageId(chatId, nextReplayMessageIndex++);
@@ -994,6 +1256,35 @@ export default function App() {
     let pendingReasoningDelta = '';
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
     let splitAssistantMessageOnNextText = false;
+
+    const previewCanvasOutput = (nextOutput: string) => {
+      if (!canvasTarget || !wantsCanvasOutput) {
+        return;
+      }
+      const content = canvasMode === 'create'
+        ? nextOutput
+        : replaceCanvasSelection(baseCanvasContent, canvasSelectionForSend, nextOutput);
+      upsertCanvasForThread(chatId, {
+        ...canvasTarget,
+        content,
+        updatedAt: new Date().toISOString(),
+        lastUpdatedByUserMessageIndex: userMessageIndex,
+      });
+    };
+
+    const restoreCanvasAfterFailure = () => {
+      if (!canvasTarget || !wantsCanvasOutput) {
+        return;
+      }
+      if (tempCanvasId) {
+        removeCanvasForThread(chatId, tempCanvasId);
+        return;
+      }
+      upsertCanvasForThread(chatId, {
+        ...canvasTarget,
+        content: baseCanvasContent,
+      });
+    };
 
     const ensureStreamingAssistantMessage = () => {
       if (!splitAssistantMessageOnNextText) {
@@ -1021,6 +1312,10 @@ export default function App() {
       const nextReasoningDelta = pendingReasoningDelta;
       pendingDelta = '';
       pendingReasoningDelta = '';
+      if (nextDelta && wantsCanvasOutput) {
+        streamedCanvasOutput += nextDelta;
+        previewCanvasOutput(streamedCanvasOutput);
+      }
       updateChat(chatId, (chat) => ({
         ...chat,
         updatedAt: new Date().toISOString(),
@@ -1057,6 +1352,15 @@ export default function App() {
     setDraft('');
     setError(null);
     setStreamingChatIds((prev) => new Set(prev).add(chatId));
+    if (tempCanvas) {
+      upsertCanvasForThread(chatId, tempCanvas);
+      setActiveCanvasIdByThread((current) => ({ ...current, [chatId]: tempCanvas.id }));
+      setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: true }));
+      setComposerTarget('canvas');
+    } else if (canvasTarget && (wantsCanvasOutput || canvasPaneOpen)) {
+      setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: true }));
+    }
+
     updateChat(chatId, (chat) => ({
       ...chat,
       title: chat.title === 'New chat' ? summarizeTitle(prompt) : chat.title,
@@ -1082,6 +1386,16 @@ export default function App() {
           model,
           reasoningEffort,
           attachments: messageAttachments.map((attachment) => attachment.id),
+          canvas: canvasMode && canvasTarget
+            ? {
+                mode: canvasMode,
+                canvasId: tempCanvasId ? undefined : canvasTarget.id,
+                title: canvasTarget.title,
+                kind: canvasTarget.kind,
+                currentContent: baseCanvasContent,
+                selection: canvasSelectionForSend ?? undefined,
+              }
+            : undefined,
         },
         session.sessionToken,
         (event) => {
@@ -1240,11 +1554,13 @@ export default function App() {
             return;
           }
           if (event.type === 'error') {
+            didFail = true;
             if (flushTimer !== null) {
               clearTimeout(flushTimer);
               flushTimer = null;
             }
             flushPendingDelta();
+            restoreCanvasAfterFailure();
             updateChat(chatId, (chat) => ({
               ...chat,
               updatedAt: new Date().toISOString(),
@@ -1260,11 +1576,13 @@ export default function App() {
             return;
           }
           if (event.type === 'aborted') {
+            didAbort = true;
             if (flushTimer !== null) {
               clearTimeout(flushTimer);
               flushTimer = null;
             }
             flushPendingDelta();
+            restoreCanvasAfterFailure();
             updateChat(chatId, (chat) => {
               const assistantMessage = chat.messages.find((message) => message.id === assistantMessageId);
               const hasContent = Boolean(assistantMessage?.content.trim());
@@ -1288,12 +1606,55 @@ export default function App() {
           }
         },
       );
-    } catch (sendError) {
+
       if (flushTimer !== null) {
         clearTimeout(flushTimer);
         flushTimer = null;
       }
       flushPendingDelta();
+
+      if (canvasTarget && wantsCanvasOutput && !didFail && !didAbort) {
+        const finalContent = canvasMode === 'create'
+          ? streamedCanvasOutput
+          : replaceCanvasSelection(baseCanvasContent, canvasSelectionForSend, streamedCanvasOutput);
+        if (tempCanvasId) {
+          const payload = await createCanvas(
+            chatId,
+            {
+              title: canvasTarget.title,
+              kind: canvasTarget.kind,
+              content: finalContent,
+              sourceUserMessageIndex: userMessageIndex,
+            },
+            session.sessionToken,
+          );
+          removeCanvasForThread(chatId, tempCanvasId);
+          upsertCanvasForThread(chatId, payload.canvas);
+          setActiveCanvasIdByThread((current) => ({ ...current, [chatId]: payload.canvas.id }));
+        } else {
+          const payload = await updateCanvas(
+            chatId,
+            canvasTarget.id,
+            {
+              content: finalContent,
+              sourceUserMessageIndex: userMessageIndex,
+            },
+            session.sessionToken,
+          );
+          upsertCanvasForThread(chatId, payload.canvas);
+          setActiveCanvasIdByThread((current) => ({ ...current, [chatId]: payload.canvas.id }));
+        }
+        setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: true }));
+        setComposerTarget('canvas');
+      }
+    } catch (sendError) {
+      didFail = true;
+      if (flushTimer !== null) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      flushPendingDelta();
+      restoreCanvasAfterFailure();
       const message = sendError instanceof Error ? sendError.message : 'Unable to send message.';
       updateChat(chatId, (chat) => ({
         ...chat,
@@ -1315,9 +1676,28 @@ export default function App() {
         clearTimeout(flushTimer);
       }
       flushPendingDelta();
-      setStreamingChatIds((prev) => { const next = new Set(prev); next.delete(chatId); return next; });
+      setStreamingChatIds((prev) => {
+        const next = new Set(prev);
+        next.delete(chatId);
+        return next;
+      });
     }
-  }, [defaultModel, draft, selectedChat, session, signOut, streamingChatIds, updateChat]);
+  }, [
+    activeCanvas,
+    canvasPaneOpen,
+    canvasSelection,
+    composerTarget,
+    defaultModel,
+    draft,
+    removeCanvasForThread,
+    selectedCanvases.length,
+    selectedChat,
+    session,
+    signOut,
+    streamingChatIds,
+    updateChat,
+    upsertCanvasForThread,
+  ]);
 
   const handleAbortStreaming = useCallback(async () => {
     if (!session || !selectedChat || !streamingChatIds.has(selectedChat.id)) {
@@ -1367,6 +1747,14 @@ export default function App() {
     ? daemonRuntime.copilot.version ?? daemonRuntime.copilot.path ?? 'Installed'
     : 'Not found';
   const isSelectedChatStreaming = Boolean(selectedChat && streamingChatIds.has(selectedChat.id));
+
+  useEffect(() => {
+    if (!selectedChat) {
+      setComposerTarget('chat');
+      return;
+    }
+    setComposerTarget((canvasPaneOpenByThread[selectedChat.id] ?? false) ? 'canvas' : 'chat');
+  }, [canvasPaneOpenByThread, selectedChat]);
 
   // Auto-grow composer textarea
   useEffect(() => {
@@ -1723,39 +2111,79 @@ export default function App() {
                   </select>
                 </label>
               ) : null}
+              {selectedChat ? (
+                <button type="button" className="ghost-button" onClick={() => (canvasPaneOpen ? handleCloseCanvas() : handleOpenCanvas())}>
+                  {canvasPaneOpen ? 'Hide canvas' : 'Open canvas'}
+                </button>
+              ) : null}
               <IconButton label="Start new chat" onClick={() => void handleCreateChat()}>
                 <PlusIcon />
               </IconButton>
             </div>
           </header>
 
-          <div className="message-scroll" ref={messagesRef}>
-            {!isOnline ? <div className="top-banner offline">You are offline. The app shell is cached, but your daemon must be reachable to sign in and chat.</div> : null}
-            {loading ? (
-              <div className="empty-state"><div><h2>Loading…</h2><p>Restoring your threads and daemon health.</p></div></div>
-            ) : selectedChat?.messages.length ? (
-              <div className="message-list">
-                {selectedChat.messages.map((message, index) => (
-                  <MessageBubble
-                    key={message.id}
-                    message={message}
-                    isStreaming={
-                      streamingChatIds.has(selectedChat.id) &&
-                      message.role === 'assistant' &&
-                      index === selectedChat.messages.length - 1
-                    }
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="empty-state">
-                <div className="empty-state-content">
-                  <img className="empty-state-logo" src="./icons/continuum-mark.svg" alt="" aria-hidden="true" />
-                  <h2>Start in Continuum</h2>
-                  <p>Messages stay on your daemon, so you can reconnect from any browser on your network or tailnet.</p>
+          <div className={`main-body${canvasPaneOpen ? ' main-body--with-canvas' : ''}`}>
+            <div className="message-scroll" ref={messagesRef}>
+              {!isOnline ? <div className="top-banner offline">You are offline. The app shell is cached, but your daemon must be reachable to sign in and chat.</div> : null}
+              {loading ? (
+                <div className="empty-state"><div><h2>Loading…</h2><p>Restoring your threads and daemon health.</p></div></div>
+              ) : selectedChat?.messages.length ? (
+                <div className="message-list">
+                  {(() => {
+                    let userMessageIndex = -1;
+                    return selectedChat.messages.map((message, index) => {
+                      if (message.role === 'user') {
+                        userMessageIndex += 1;
+                      }
+                      return (
+                        <MessageBubble
+                          key={message.id}
+                          message={message}
+                          canvasReferences={message.role === 'user' ? canvasReferencesByUserMessageIndex.get(userMessageIndex) : undefined}
+                          onOpenCanvas={handleOpenCanvas}
+                          isStreaming={
+                            streamingChatIds.has(selectedChat.id) &&
+                            message.role === 'assistant' &&
+                            index === selectedChat.messages.length - 1
+                          }
+                        />
+                      );
+                    });
+                  })()}
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="empty-state">
+                  <div className="empty-state-content">
+                    <img className="empty-state-logo" src="./icons/continuum-mark.svg" alt="" aria-hidden="true" />
+                    <h2>Start in Continuum</h2>
+                    <p>Messages stay on your daemon, so you can reconnect from any browser on your network or tailnet.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {canvasPaneOpen ? (
+              <CanvasPane
+                canvases={selectedCanvases}
+                activeCanvasId={activeCanvas?.id ?? null}
+                selection={canvasSelection}
+                saving={Boolean(activeCanvas && savingCanvasId === activeCanvas.id)}
+                onSelectCanvas={(canvasId) => {
+                  if (!selectedChat) {
+                    return;
+                  }
+                  setActiveCanvasIdByThread((current) => ({ ...current, [selectedChat.id]: canvasId }));
+                  setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: null }));
+                }}
+                onClose={handleCloseCanvas}
+                onCreateCanvas={() => void handleCreateBlankCanvas()}
+                onTitleChange={handleCanvasTitleChange}
+                onContentChange={handleCanvasContentChange}
+                onContentBlur={(canvasId, title, content) => void handlePersistCanvas(canvasId, title, content)}
+                onSelectionChange={handleCanvasSelectionChange}
+                onCopy={(canvas) => void handleCopyCanvas(canvas)}
+              />
+            ) : null}
           </div>
 
           <footer className="composer">
@@ -1850,6 +2278,37 @@ export default function App() {
                     </button>
                   </div>
                 ) : null}
+              </div>
+            ) : null}
+
+            {selectedChat ? (
+              <div className="composer-targets">
+                <button
+                  type="button"
+                  className={`composer-target${composerTarget === 'chat' ? ' active' : ''}`}
+                  onClick={() => setComposerTarget('chat')}
+                >
+                  Chat
+                </button>
+                <button
+                  type="button"
+                  className={`composer-target${composerTarget === 'canvas' ? ' active' : ''}`}
+                  onClick={() => {
+                    handleOpenCanvas(activeCanvas?.id);
+                    setComposerTarget('canvas');
+                  }}
+                >
+                  Canvas
+                </button>
+                <div className="helper-text">
+                  {activeCanvas && composerTarget === 'canvas'
+                    ? canvasSelection
+                      ? `Next edit targets the selected text in “${activeCanvas.title}”.`
+                      : `Next edit targets “${activeCanvas.title}”.`
+                    : canvasPaneOpen && activeCanvas
+                      ? `Canvas “${activeCanvas.title}” is open for context.`
+                      : 'Say “use canvas” to draft directly in the editor.'}
+                </div>
               </div>
             ) : null}
 

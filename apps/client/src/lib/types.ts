@@ -269,6 +269,13 @@ export type CanvasArtifact = {
   latestRevisionNumber: number;
 };
 
+export type ChatCanvasSyncEvent = {
+  type: 'canvas_sync';
+  canvases: CanvasArtifact[];
+  activeCanvasId?: string | null;
+  open?: boolean;
+};
+
 export type ChatMessageMetadata = {
   sessionMessageId?: string;
   reasoning?: string;
@@ -365,6 +372,7 @@ export type ChatStreamEvent =
   | { type: 'plan'; items: string[] }
   | { type: 'usage'; usage: ChatUsage }
   | { type: 'tool_event'; activity: ChatToolActivity }
+  | ChatCanvasSyncEvent
   | { type: 'user_input_request'; request: ChatUserInputRequest }
   | { type: 'user_input_cleared'; requestId: string }
   | { type: 'permission_request'; request: ChatPermissionRequest }

@@ -662,6 +662,13 @@ export default function App() {
   );
   const canvasPaneOpen = selectedChat ? canvasPaneOpenByThread[selectedChat.id] ?? false : false;
   const canvasSelection = selectedChat ? canvasSelectionByThread[selectedChat.id] ?? null : null;
+
+  useEffect(() => {
+    if (canvasPaneOpen) {
+      setSidebarOpen(false);
+    }
+  }, [canvasPaneOpen]);
+
   const canvasReferencesByUserMessageIndex = useMemo(() => {
     const next = new Map<number, CanvasArtifact[]>();
     for (const canvas of selectedCanvases) {
@@ -1247,6 +1254,7 @@ export default function App() {
     const canvasTarget = baseCanvas ?? tempCanvas;
     const baseCanvasContent = baseCanvas?.content ?? '';
     let streamedCanvasOutput = '';
+    let canvasManagedByTool = false;
     let didAbort = false;
     let didFail = false;
     let nextReplayMessageIndex = selectedChat.messages.length;
@@ -1273,7 +1281,7 @@ export default function App() {
     };
 
     const restoreCanvasAfterFailure = () => {
-      if (!canvasTarget || !wantsCanvasOutput) {
+      if (!canvasTarget || !wantsCanvasOutput || canvasManagedByTool) {
         return;
       }
       if (tempCanvasId) {
@@ -1312,7 +1320,7 @@ export default function App() {
       const nextReasoningDelta = pendingReasoningDelta;
       pendingDelta = '';
       pendingReasoningDelta = '';
-      if (nextDelta && wantsCanvasOutput) {
+      if (nextDelta && wantsCanvasOutput && !canvasManagedByTool) {
         streamedCanvasOutput += nextDelta;
         previewCanvasOutput(streamedCanvasOutput);
       }
@@ -1500,6 +1508,9 @@ export default function App() {
             return;
           }
           if (event.type === 'tool_event') {
+            if (event.activity.toolName.startsWith('canvas.')) {
+              canvasManagedByTool = true;
+            }
             if (flushTimer !== null) {
               clearTimeout(flushTimer);
               flushTimer = null;
@@ -1522,6 +1533,25 @@ export default function App() {
               ),
             }));
             splitAssistantMessageOnNextText = true;
+            return;
+          }
+          if (event.type === 'canvas_sync') {
+            canvasManagedByTool = true;
+            if (tempCanvasId) {
+              removeCanvasForThread(chatId, tempCanvasId);
+            }
+            replaceThreadCanvases(chatId, event.canvases);
+            if (event.activeCanvasId !== undefined) {
+              setActiveCanvasIdByThread((current) => ({ ...current, [chatId]: event.activeCanvasId ?? null }));
+            }
+            if (event.open !== undefined) {
+              const shouldOpen = event.open;
+              setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: shouldOpen }));
+              if (!shouldOpen) {
+                setCanvasSelectionByThread((current) => ({ ...current, [chatId]: null }));
+              }
+              setComposerTarget(shouldOpen ? 'canvas' : 'chat');
+            }
             return;
           }
           if (event.type === 'user_input_request') {
@@ -1613,7 +1643,7 @@ export default function App() {
       }
       flushPendingDelta();
 
-      if (canvasTarget && wantsCanvasOutput && !didFail && !didAbort) {
+      if (canvasTarget && wantsCanvasOutput && !canvasManagedByTool && !didFail && !didAbort) {
         const finalContent = canvasMode === 'create'
           ? streamedCanvasOutput
           : replaceCanvasSelection(baseCanvasContent, canvasSelectionForSend, streamedCanvasOutput);
@@ -1689,6 +1719,7 @@ export default function App() {
     composerTarget,
     defaultModel,
     draft,
+    replaceThreadCanvases,
     removeCanvasForThread,
     selectedCanvases.length,
     selectedChat,
@@ -1950,7 +1981,7 @@ export default function App() {
   return (
     <>
       {sidebarOpen ? <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} /> : null}
-      <div className="app-shell">
+      <div className={`app-shell${canvasPaneOpen ? ' app-shell--canvas-focus' : ''}`}>
         <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
           <div className="sidebar-topbar">
             <div>
@@ -2059,7 +2090,11 @@ export default function App() {
         <main className="main-panel">
           <header className="main-header">
             <div className="main-header-leading">
-              <IconButton label="Open sidebar" onClick={() => setSidebarOpen(true)} className="mobile-menu-trigger">
+              <IconButton
+                label={canvasPaneOpen ? 'Show chat list' : 'Open sidebar'}
+                onClick={() => setSidebarOpen(true)}
+                className={`mobile-menu-trigger${canvasPaneOpen ? ' mobile-menu-trigger--visible' : ''}`}
+              >
                 <MenuIcon />
               </IconButton>
               <div className="header-copy">

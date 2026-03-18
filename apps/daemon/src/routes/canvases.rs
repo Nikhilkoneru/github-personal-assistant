@@ -59,25 +59,16 @@ async fn create(
 ) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
     ensure_thread_access(&state, &headers, &thread_id).await?;
 
-    let title = body.title.trim();
-    if title.len() < 2 || title.len() > 120 {
-        return Err(AppError::BadRequest(
-            "Canvas title must be 2-120 characters.".into(),
-        ));
-    }
-
-    let kind = body.kind.trim();
-    if kind.is_empty() || kind.len() > 40 {
-        return Err(AppError::BadRequest(
-            "Canvas kind must be 1-40 characters.".into(),
-        ));
-    }
+    let title = canvas_store::normalize_canvas_title(&body.title)
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    let kind = canvas_store::normalize_canvas_kind(&body.kind)
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
 
     let canvas = canvas_store::create_canvas(
         &state.db,
         &thread_id,
-        title,
-        kind,
+        &title,
+        &kind,
         body.content.as_deref().unwrap_or(""),
         body.source_user_message_index,
     )
@@ -110,12 +101,8 @@ async fn update(
     ensure_thread_access(&state, &headers, &thread_id).await?;
 
     if let Some(title) = body.title.as_deref() {
-        let trimmed = title.trim();
-        if trimmed.len() < 2 || trimmed.len() > 120 {
-            return Err(AppError::BadRequest(
-                "Canvas title must be 2-120 characters.".into(),
-            ));
-        }
+        canvas_store::normalize_canvas_title(title)
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
     }
 
     let canvas = canvas_store::update_canvas(

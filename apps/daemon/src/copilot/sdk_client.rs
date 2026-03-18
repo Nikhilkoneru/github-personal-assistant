@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::time::Duration;
 
 use anyhow::Context;
 use chrono::Utc;
@@ -11,7 +12,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, RwLock, broadcast, oneshot};
 
-const SDK_PROTOCOL_VERSION: u32 = 2;
+const MIN_SDK_PROTOCOL_VERSION: u32 = 2;
+const MAX_SDK_PROTOCOL_VERSION: u32 = 3;
 pub const SDK_PERMISSION_APPROVED: &str = "approved";
 pub const SDK_PERMISSION_DENIED: &str = "denied-no-approval-rule-and-could-not-request-from-user";
 
@@ -165,6 +167,17 @@ pub struct PendingPermissionRequest {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingToolCallRequest {
+    pub request_id: String,
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub arguments: Value,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionEvent {
     pub id: String,
@@ -234,17 +247,24 @@ struct PendingUserInputState {
 
 struct PendingPermissionState {
     request: PendingPermissionRequest,
-    response_tx: oneshot::Sender<String>,
+    response_tx: Option<oneshot::Sender<String>>,
+}
+
+struct PendingToolCallState {
+    request: PendingToolCallRequest,
+    response_tx: Option<oneshot::Sender<Value>>,
 }
 
 pub struct SdkConnection {
     child: Mutex<Child>,
     writer: Arc<Mutex<ChildStdin>>,
     next_id: AtomicU64,
+    protocol_version: AtomicU32,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<JsonRpcResponse>>>>,
     sessions: Arc<RwLock<HashMap<String, Arc<SessionRecord>>>>,
     pending_user_inputs: Arc<Mutex<HashMap<String, PendingUserInputState>>>,
     pending_permissions: Arc<Mutex<HashMap<String, PendingPermissionState>>>,
+    pending_tool_calls: Arc<Mutex<HashMap<String, PendingToolCallState>>>,
 }
 
 impl SdkConnection {
@@ -284,6 +304,7 @@ impl SdkConnection {
         let sessions = Arc::new(RwLock::new(HashMap::new()));
         let pending_user_inputs = Arc::new(Mutex::new(HashMap::new()));
         let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
+        let pending_tool_calls = Arc::new(Mutex::new(HashMap::new()));
         let writer = Arc::new(Mutex::new(stdin));
 
         Self::spawn_reader_task(
@@ -293,16 +314,19 @@ impl SdkConnection {
             sessions.clone(),
             pending_user_inputs.clone(),
             pending_permissions.clone(),
+            pending_tool_calls.clone(),
         );
 
         let conn = Self {
             child: Mutex::new(child),
             writer,
             next_id: AtomicU64::new(1),
+            protocol_version: AtomicU32::new(MIN_SDK_PROTOCOL_VERSION),
             pending,
             sessions,
             pending_user_inputs,
             pending_permissions,
+            pending_tool_calls,
         };
 
         conn.verify_protocol_version().await?;
@@ -550,6 +574,14 @@ impl SdkConnection {
             .map(|state| state.request.clone())
     }
 
+    pub async fn get_pending_tool_call(&self, request_id: &str) -> Option<PendingToolCallRequest> {
+        self.pending_tool_calls
+            .lock()
+            .await
+            .get(request_id)
+            .map(|state| state.request.clone())
+    }
+
     pub async fn respond_to_user_input(&self, request_id: &str, answer: &str) -> anyhow::Result<()> {
         let state = self.pending_user_inputs.lock().await.remove(request_id);
         let Some(state) = state else {
@@ -570,10 +602,49 @@ impl SdkConnection {
         let Some(state) = state else {
             anyhow::bail!("Copilot permission request {request_id} is no longer pending");
         };
-        state
-            .response_tx
-            .send(option_id.to_string())
-            .map_err(|_| anyhow::anyhow!("Failed to deliver permission response"))
+        if let Some(response_tx) = state.response_tx {
+            response_tx
+                .send(option_id.to_string())
+                .map_err(|_| anyhow::anyhow!("Failed to deliver permission response"))
+        } else {
+            self.invoke(
+                "session.permissions.handlePendingPermissionRequest",
+                Some(json!({
+                    "sessionId": state.request.session_id,
+                    "requestId": request_id,
+                    "result": permission_result_from_option_id(option_id),
+                })),
+            )
+            .await
+            .map(|_| ())
+        }
+    }
+
+    pub async fn respond_to_tool_call(&self, request_id: &str, result: Value) -> anyhow::Result<()> {
+        let state = self.pending_tool_calls.lock().await.remove(request_id);
+        let Some(state) = state else {
+            anyhow::bail!("Copilot tool call request {request_id} is no longer pending");
+        };
+        if let Some(response_tx) = state.response_tx {
+            response_tx
+                .send(result)
+                .map_err(|_| anyhow::anyhow!("Failed to deliver tool call response"))
+        } else {
+            self.invoke(
+                "session.tools.handlePendingToolCall",
+                Some(json!({
+                    "sessionId": state.request.session_id,
+                    "requestId": request_id,
+                    "result": result,
+                })),
+            )
+            .await
+            .map(|_| ())
+        }
+    }
+
+    pub fn protocol_version(&self) -> u32 {
+        self.protocol_version.load(Ordering::SeqCst)
     }
 
     pub fn is_missing_session_error(error: &anyhow::Error) -> bool {
@@ -583,15 +654,22 @@ impl SdkConnection {
             || message.contains("Resource not found")
     }
 
+    pub fn is_resettable_session_error(error: &anyhow::Error) -> bool {
+        Self::is_missing_session_error(error)
+            || error.to_string().contains("Session file is corrupted")
+    }
+
     async fn verify_protocol_version(&self) -> anyhow::Result<()> {
         let result = self.invoke("ping", Some(json!({ "message": null }))).await?;
         if let Some(protocol_version) = result.get("protocolVersion").and_then(Value::as_u64) {
             let protocol_version = protocol_version as u32;
-            if protocol_version != SDK_PROTOCOL_VERSION {
+            if !(MIN_SDK_PROTOCOL_VERSION..=MAX_SDK_PROTOCOL_VERSION).contains(&protocol_version) {
                 anyhow::bail!(
-                    "Copilot SDK protocol mismatch: expected {SDK_PROTOCOL_VERSION}, got {protocol_version}"
+                    "Copilot SDK protocol mismatch: expected {MIN_SDK_PROTOCOL_VERSION}-{MAX_SDK_PROTOCOL_VERSION}, got {protocol_version}"
                 );
             }
+            self.protocol_version
+                .store(protocol_version, Ordering::SeqCst);
         }
         Ok(())
     }
@@ -641,6 +719,7 @@ impl SdkConnection {
         sessions: Arc<RwLock<HashMap<String, Arc<SessionRecord>>>>,
         pending_user_inputs: Arc<Mutex<HashMap<String, PendingUserInputState>>>,
         pending_permissions: Arc<Mutex<HashMap<String, PendingPermissionState>>>,
+        pending_tool_calls: Arc<Mutex<HashMap<String, PendingToolCallState>>>,
     ) {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -674,13 +753,20 @@ impl SdkConnection {
                         }
                     }
                     IncomingMessage::Notification(notification) => {
-                        handle_notification(notification, &sessions).await;
+                        handle_notification(
+                            notification,
+                            &sessions,
+                            &pending_permissions,
+                            &pending_tool_calls,
+                        )
+                        .await;
                     }
                     IncomingMessage::Request(request) => {
                         let writer = writer.clone();
                         let sessions = sessions.clone();
                         let pending_user_inputs = pending_user_inputs.clone();
                         let pending_permissions = pending_permissions.clone();
+                        let pending_tool_calls = pending_tool_calls.clone();
                         tokio::spawn(async move {
                             handle_request(
                                 request,
@@ -688,6 +774,7 @@ impl SdkConnection {
                                 sessions,
                                 pending_user_inputs,
                                 pending_permissions,
+                                pending_tool_calls,
                             )
                             .await;
                         });
@@ -736,6 +823,8 @@ impl SessionEventEnvelope {
 async fn handle_notification(
     notification: JsonRpcRequest,
     sessions: &Arc<RwLock<HashMap<String, Arc<SessionRecord>>>>,
+    pending_permissions: &Arc<Mutex<HashMap<String, PendingPermissionState>>>,
+    pending_tool_calls: &Arc<Mutex<HashMap<String, PendingToolCallState>>>,
 ) {
     match notification.method.as_str() {
         "session.event" => {
@@ -752,7 +841,16 @@ async fn handle_notification(
                 return;
             };
             if let Some(record) = sessions.read().await.get(session_id) {
-                let _ = record.events.send(event.into_session_event());
+                let event = event.into_session_event();
+                let _ = record.events.send(event.clone());
+                maybe_emit_v3_bridge_events(
+                    record,
+                    session_id,
+                    &event,
+                    pending_permissions,
+                    pending_tool_calls,
+                )
+                .await;
             }
         }
         "session.lifecycle" => {
@@ -778,6 +876,7 @@ async fn handle_request(
     sessions: Arc<RwLock<HashMap<String, Arc<SessionRecord>>>>,
     pending_user_inputs: Arc<Mutex<HashMap<String, PendingUserInputState>>>,
     pending_permissions: Arc<Mutex<HashMap<String, PendingPermissionState>>>,
+    pending_tool_calls: Arc<Mutex<HashMap<String, PendingToolCallState>>>,
 ) {
     let Some(request_id_value) = request.id.clone() else {
         return;
@@ -799,6 +898,15 @@ async fn handle_request(
                 request.params.as_ref().unwrap_or(&Value::Null),
                 &sessions,
                 &pending_user_inputs,
+            )
+            .await
+        }
+        "tool.call" => {
+            handle_tool_call_request(
+                &request_id_value,
+                request.params.as_ref().unwrap_or(&Value::Null),
+                &sessions,
+                &pending_tool_calls,
             )
             .await
         }
@@ -890,7 +998,7 @@ async fn handle_permission_request(
         request_id.clone(),
         PendingPermissionState {
             request: request.clone(),
-            response_tx,
+            response_tx: Some(response_tx),
         },
     );
 
@@ -972,12 +1080,86 @@ async fn handle_user_input_request(
     }))
 }
 
+async fn handle_tool_call_request(
+    request_id_value: &Value,
+    params: &Value,
+    sessions: &Arc<RwLock<HashMap<String, Arc<SessionRecord>>>>,
+    pending_tool_calls: &Arc<Mutex<HashMap<String, PendingToolCallState>>>,
+) -> anyhow::Result<Value> {
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .context("Missing sessionId in tool.call")?;
+    let Some(session) = sessions.read().await.get(session_id).cloned() else {
+        return Ok(json!({
+            "result": tool_failure_result(
+                format!("Unknown session {session_id}"),
+                "The requested tool could not run because the session no longer exists.",
+            )
+        }));
+    };
+    let tool_call_id = params
+        .get("toolCallId")
+        .and_then(Value::as_str)
+        .context("Missing toolCallId in tool.call")?;
+    let tool_name = params
+        .get("toolName")
+        .and_then(Value::as_str)
+        .context("Missing toolName in tool.call")?;
+    let request_id = rpc_id_string(request_id_value);
+    let request = PendingToolCallRequest {
+        request_id: request_id.clone(),
+        session_id: session_id.to_string(),
+        tool_call_id: tool_call_id.to_string(),
+        tool_name: tool_name.to_string(),
+        arguments: params.get("arguments").cloned().unwrap_or(Value::Null),
+        created_at: Utc::now().to_rfc3339(),
+    };
+
+    let (response_tx, response_rx) = oneshot::channel();
+    pending_tool_calls.lock().await.insert(
+        request_id.clone(),
+        PendingToolCallState {
+            request: request.clone(),
+            response_tx: Some(response_tx),
+        },
+    );
+
+    let _ = session.events.send(SessionEvent {
+        id: format!("tool-call-request-{request_id}"),
+        timestamp: Utc::now().to_rfc3339(),
+        event_type: "sdk.tool_call_request".to_string(),
+        data: serde_json::to_value(&request)?,
+    });
+
+    let result = match tokio::time::timeout(Duration::from_secs(60), response_rx).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => {
+            pending_tool_calls.lock().await.remove(&request_id);
+            tool_failure_result(
+                "Tool result channel closed".to_string(),
+                "The tool could not finish because the daemon stopped waiting for the result.",
+            )
+        }
+        Err(_) => {
+            pending_tool_calls.lock().await.remove(&request_id);
+            tool_failure_result(
+                format!("Tool '{tool_name}' timed out"),
+                "The tool did not finish within the allowed time.",
+            )
+        }
+    };
+
+    Ok(json!({ "result": result }))
+}
+
 fn build_session_config(cwd: &str, model: Option<&str>, reasoning_effort: Option<&str>) -> Value {
     let mut config = json!({
         "workingDirectory": cwd,
         "streaming": true,
         "requestPermission": true,
         "requestUserInput": true,
+        "tools": build_canvas_tools(),
     });
     if let Some(model) = model.filter(|model| !model.trim().is_empty()) {
         config["model"] = json!(model);
@@ -990,6 +1172,202 @@ fn build_session_config(cwd: &str, model: Option<&str>, reasoning_effort: Option
 
 fn build_resume_config(cwd: &str, model: Option<&str>, reasoning_effort: Option<&str>) -> Value {
     build_session_config(cwd, model, reasoning_effort)
+}
+
+async fn maybe_emit_v3_bridge_events(
+    session: &Arc<SessionRecord>,
+    session_id: &str,
+    event: &SessionEvent,
+    pending_permissions: &Arc<Mutex<HashMap<String, PendingPermissionState>>>,
+    pending_tool_calls: &Arc<Mutex<HashMap<String, PendingToolCallState>>>,
+) {
+    match event.event_type.as_str() {
+        "permission.requested" => {
+            let Some(request_id) = event.data.get("requestId").and_then(Value::as_str) else {
+                return;
+            };
+            let permission = event
+                .data
+                .get("permissionRequest")
+                .unwrap_or(&Value::Null);
+            let tool_call_id = permission
+                .get("toolCallId")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let tool_name = permission
+                .get("toolName")
+                .or_else(|| permission.get("toolTitle"))
+                .or_else(|| permission.get("title"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let tool_kind = permission
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let question = match permission.get("kind").and_then(Value::as_str) {
+                Some("custom-tool") => tool_name
+                    .as_ref()
+                    .map(|name| format!("Allow {name}?"))
+                    .unwrap_or_else(|| "Allow this tool?".to_string()),
+                _ => event
+                    .data
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .or_else(|| tool_name.as_ref().map(|name| format!("Allow {name}?")))
+                    .unwrap_or_else(|| "Copilot needs permission to continue.".to_string()),
+            };
+            let request = PendingPermissionRequest {
+                request_id: request_id.to_string(),
+                session_id: session_id.to_string(),
+                tool_call_id,
+                tool_name,
+                tool_kind,
+                question,
+                options: vec![
+                    PendingPermissionOption {
+                        option_id: SDK_PERMISSION_APPROVED.to_string(),
+                        label: "Allow".to_string(),
+                        kind: Some("allow-once".to_string()),
+                    },
+                    PendingPermissionOption {
+                        option_id: SDK_PERMISSION_DENIED.to_string(),
+                        label: "Deny".to_string(),
+                        kind: Some("deny".to_string()),
+                    },
+                ],
+                created_at: event.timestamp.clone(),
+            };
+            pending_permissions.lock().await.insert(
+                request_id.to_string(),
+                PendingPermissionState {
+                    request: request.clone(),
+                    response_tx: None,
+                },
+            );
+            let _ = session.events.send(SessionEvent {
+                id: format!("permission-request-{request_id}"),
+                timestamp: event.timestamp.clone(),
+                event_type: "sdk.permission_request".to_string(),
+                data: serde_json::to_value(request).unwrap_or(Value::Null),
+            });
+        }
+        "external_tool.requested" => {
+            let Some(request_id) = event.data.get("requestId").and_then(Value::as_str) else {
+                return;
+            };
+            let Some(tool_call_id) = event.data.get("toolCallId").and_then(Value::as_str) else {
+                return;
+            };
+            let Some(tool_name) = event.data.get("toolName").and_then(Value::as_str) else {
+                return;
+            };
+            let request = PendingToolCallRequest {
+                request_id: request_id.to_string(),
+                session_id: session_id.to_string(),
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                arguments: event.data.get("arguments").cloned().unwrap_or(Value::Null),
+                created_at: event.timestamp.clone(),
+            };
+            pending_tool_calls.lock().await.insert(
+                request_id.to_string(),
+                PendingToolCallState {
+                    request: request.clone(),
+                    response_tx: None,
+                },
+            );
+            let _ = session.events.send(SessionEvent {
+                id: format!("tool-call-request-{request_id}"),
+                timestamp: event.timestamp.clone(),
+                event_type: "sdk.tool_call_request".to_string(),
+                data: serde_json::to_value(request).unwrap_or(Value::Null),
+            });
+        }
+        _ => {}
+    }
+}
+
+fn build_canvas_tools() -> Value {
+    json!([
+        {
+            "name": "canvas.create",
+            "description": "Create a new canvas artifact for the current chat thread and store its full content.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "Human-friendly title for the new canvas." },
+                    "kind": { "type": "string", "description": "Canvas type such as document, code, or notes." },
+                    "content": { "type": "string", "description": "Full initial content to store in the canvas." },
+                    "open": { "type": "boolean", "description": "Whether the UI should open the canvas after creation." }
+                },
+                "required": ["title", "content"]
+            },
+            "skipPermission": true
+        },
+        {
+            "name": "canvas.update",
+            "description": "Update an existing canvas artifact by replacing its full content and optionally changing its title.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "canvasId": { "type": "string", "description": "ID of the canvas to update." },
+                    "title": { "type": "string", "description": "Optional replacement title." },
+                    "content": { "type": "string", "description": "Full updated canvas content." },
+                    "open": { "type": "boolean", "description": "Whether the UI should keep the canvas open after updating it." }
+                },
+                "required": ["content"]
+            },
+            "skipPermission": true
+        },
+        {
+            "name": "canvas.list",
+            "description": "List the canvases available in the current chat thread.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            },
+            "skipPermission": true
+        },
+        {
+            "name": "canvas.open",
+            "description": "Open an existing canvas in the UI so the user can focus on it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "canvasId": { "type": "string", "description": "ID of the canvas to open." }
+                },
+                "required": ["canvasId"]
+            },
+            "skipPermission": true
+        },
+        {
+            "name": "canvas.close",
+            "description": "Close the canvas pane in the UI without deleting any saved canvas.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            },
+            "skipPermission": true
+        }
+    ])
+}
+
+fn tool_failure_result(error: String, text_result_for_llm: &str) -> Value {
+    json!({
+        "textResultForLlm": text_result_for_llm,
+        "resultType": "failure",
+        "error": error,
+        "toolTelemetry": {},
+    })
+}
+
+fn permission_result_from_option_id(option_id: &str) -> Value {
+    if option_id == SDK_PERMISSION_APPROVED {
+        json!({ "kind": "approved" })
+    } else {
+        json!({ "kind": "denied-no-approval-rule-and-could-not-request-from-user" })
+    }
 }
 
 fn classify_message(value: Value) -> Option<IncomingMessage> {

@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 use std::time::Duration;
 
+use anyhow::Context;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -14,12 +15,15 @@ use tokio::sync::mpsc;
 
 use crate::auth_middleware::require_session;
 use crate::copilot::{
-    PendingPermissionOption, PendingPermissionRequest, SDK_PERMISSION_APPROVED,
-    SDK_PERMISSION_DENIED, SendPromptInput, SessionEvent, UserMessageAttachment,
+    PendingPermissionOption, PendingPermissionRequest, PendingToolCallRequest,
+    SDK_PERMISSION_APPROVED, SDK_PERMISSION_DENIED, SendPromptInput, SessionEvent,
+    UserMessageAttachment,
 };
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::store::{attachment_store, preferences_store, thread_store, workspace_store};
+use crate::store::{
+    attachment_store, canvas_store, preferences_store, thread_store, workspace_store,
+};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -79,6 +83,35 @@ struct PermissionInput {
     thread_id: String,
     request_id: String,
     option_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasCreateToolArgs {
+    title: String,
+    #[serde(default)]
+    kind: Option<String>,
+    content: String,
+    #[serde(default)]
+    open: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasUpdateToolArgs {
+    #[serde(default)]
+    canvas_id: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    content: String,
+    #[serde(default)]
+    open: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasOpenToolArgs {
+    canvas_id: String,
 }
 
 async fn abort_chat(
@@ -235,7 +268,8 @@ async fn stream_chat(
     .await?;
     thread_store::update_thread_preview(&state.db, &thread.id, &prompt).await?;
 
-    let prompt_text = build_prompt_text(&prompt, body.canvas.as_ref());
+    let canvas_context = body.canvas.clone();
+    let prompt_text = build_prompt_text(&prompt, canvas_context.as_ref());
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(256);
     let state_clone = state.clone();
@@ -279,8 +313,9 @@ async fn stream_chat(
                     (session_id, true)
                 }
                 Err(error)
-                    if crate::copilot::sdk_client::SdkConnection::is_missing_session_error(&error) =>
+                    if crate::copilot::sdk_client::SdkConnection::is_resettable_session_error(&error) =>
                 {
+                    let _ = thread_store::clear_thread_session(&state_clone.db, &thread_id).await;
                     match conn
                         .new_session(&workspace_path, Some(&model), reasoning_effort.as_deref())
                         .await
@@ -335,9 +370,7 @@ async fn stream_chat(
             }
         };
 
-        let next_user_message_index = if attachment_ids.is_empty() {
-            None
-        } else if session_was_resumed {
+        let source_user_message_index = if session_was_resumed {
             next_user_message_index(&conn, &copilot_session_id).await
         } else {
             Some(0)
@@ -370,7 +403,7 @@ async fn stream_chat(
             }
         };
         if !attachment_ids.is_empty() {
-            match next_user_message_index {
+            match source_user_message_index {
                 Some(user_message_index) => {
                     if let Err(error) = attachment_store::save_message_attachments(
                         &state_clone.db,
@@ -418,6 +451,9 @@ async fn stream_chat(
                                 &state_clone,
                                 &conn,
                                 &copilot_session_id,
+                                &thread_id,
+                                source_user_message_index,
+                                canvas_context.as_ref(),
                             ).await {
                                 break;
                             }
@@ -467,29 +503,33 @@ fn build_canvas_prompt(prompt: &str, canvas: Option<&CanvasPromptContext>) -> St
 
     match canvas.mode.as_str() {
         "create" => format!(
-            "You are creating content for a {kind} canvas titled \"{title}\"{identifier}.\n\
-Return only the canvas content. Do not add commentary, prefaces, or markdown fences unless the content itself requires them.\n\n\
+            "The user wants to create or draft in a {kind} canvas titled \"{title}\"{identifier}.\n\
+Prefer using the `canvas.create` tool to create the artifact instead of returning the draft as plain chat text.\n\
+When you call the tool, provide the full canvas content and a suitable title/kind.\n\
+If you also send a chat reply after the tool call, keep it brief and reference the canvas naturally.\n\n\
 User request:\n{prompt}"
         ),
         "update" => {
             if let Some(selection) = canvas.selection.as_ref() {
                 format!(
-                    "You are editing the selected portion of a {kind} canvas titled \"{title}\"{identifier}.\n\
+                    "The user wants to edit the selected portion of a {kind} canvas titled \"{title}\"{identifier}.\n\
 Current canvas content:\n<<<CANVAS\n{current_content}\nCANVAS\n\n\
 Selected range: {start}-{end}\n\
 Selected text:\n<<<SELECTION\n{selection_text}\nSELECTION\n\n\
-User request:\n{prompt}\n\n\
-Return only the replacement text for the selected range. Do not add commentary or markdown fences.",
+Prefer using the `canvas.update` tool for the actual mutation. Send the full updated canvas content in the tool call.\n\
+If you also reply in chat, keep it brief and do not repeat the full document inline.\n\n\
+User request:\n{prompt}",
                     start = selection.start,
                     end = selection.end,
                     selection_text = selection.text
                 )
             } else {
                 format!(
-                    "You are revising a {kind} canvas titled \"{title}\"{identifier}.\n\
+                    "The user wants to revise a {kind} canvas titled \"{title}\"{identifier}.\n\
 Current canvas content:\n<<<CANVAS\n{current_content}\nCANVAS\n\n\
-User request:\n{prompt}\n\n\
-Return the full updated canvas content only. Do not add commentary or markdown fences."
+Prefer using the `canvas.update` tool for the actual mutation. Send the full updated canvas content in the tool call.\n\
+If you also reply in chat, keep it brief and do not repeat the full document inline.\n\n\
+User request:\n{prompt}"
                 )
             }
         }
@@ -547,6 +587,9 @@ async fn process_event(
     state: &AppState,
     conn: &crate::copilot::sdk_client::SdkConnection,
     session_id: &str,
+    thread_id: &str,
+    source_user_message_index: Option<usize>,
+    canvas_context: Option<&CanvasPromptContext>,
 ) -> bool {
     match event.event_type.as_str() {
         "assistant.message_delta" => {
@@ -743,6 +786,23 @@ async fn process_event(
                     .await;
             }
         }
+        "sdk.tool_call_request" => {
+            let Ok(request) = serde_json::from_value::<PendingToolCallRequest>(event.data.clone()) else {
+                return false;
+            };
+            if request.session_id == session_id {
+                handle_canvas_tool_call(
+                    state,
+                    conn,
+                    tx,
+                    thread_id,
+                    source_user_message_index,
+                    canvas_context,
+                    &request,
+                )
+                .await;
+            }
+        }
         "abort" => {
             let message = event
                 .data
@@ -779,6 +839,232 @@ async fn process_event(
         _ => {}
     }
     false
+}
+
+async fn handle_canvas_tool_call(
+    state: &AppState,
+    conn: &crate::copilot::sdk_client::SdkConnection,
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    thread_id: &str,
+    source_user_message_index: Option<usize>,
+    canvas_context: Option<&CanvasPromptContext>,
+    request: &PendingToolCallRequest,
+) {
+    let result = match request.tool_name.as_str() {
+        "canvas.create" | "canvas_create" => handle_canvas_create_tool(
+            state,
+            tx,
+            thread_id,
+            source_user_message_index,
+            request,
+        )
+        .await,
+        "canvas.update" | "canvas_update" => handle_canvas_update_tool(
+            state,
+            tx,
+            thread_id,
+            source_user_message_index,
+            canvas_context,
+            request,
+        )
+        .await,
+        "canvas.list" | "canvas_list" => handle_canvas_list_tool(state, tx, thread_id).await,
+        "canvas.open" | "canvas_open" => handle_canvas_open_tool(state, tx, thread_id, request).await,
+        "canvas.close" | "canvas_close" => handle_canvas_close_tool(state, tx, thread_id).await,
+        _ => Ok(tool_failure_result(
+            format!("Unsupported tool '{}'", request.tool_name),
+            "This daemon does not support that tool.",
+        )),
+    };
+
+    let response = match result {
+        Ok(result) => result,
+        Err(error) => tool_failure_result(
+            error.to_string(),
+            "The requested canvas action could not be completed.",
+        ),
+    };
+
+    if let Err(error) = conn.respond_to_tool_call(&request.request_id, response).await {
+        let _ = tx
+            .send(Ok(make_event(&json!({
+                "type": "error",
+                "message": format!("Failed to respond to Copilot tool call: {error}"),
+            }))))
+            .await;
+    }
+}
+
+async fn handle_canvas_create_tool(
+    state: &AppState,
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    thread_id: &str,
+    source_user_message_index: Option<usize>,
+    request: &PendingToolCallRequest,
+) -> anyhow::Result<serde_json::Value> {
+    let args: CanvasCreateToolArgs = serde_json::from_value(request.arguments.clone())?;
+    let title = canvas_store::normalize_canvas_title(&args.title)?;
+    let kind = canvas_store::normalize_canvas_kind(args.kind.as_deref().unwrap_or("document"))?;
+    let canvas = canvas_store::create_canvas(
+        &state.db,
+        thread_id,
+        &title,
+        &kind,
+        &args.content,
+        source_user_message_index,
+    )
+    .await?;
+    emit_canvas_sync(tx, &state.db, thread_id, Some(canvas.id.as_str()), args.open.or(Some(true)))
+        .await?;
+    Ok(tool_success_result(format!(
+        "Created canvas \"{}\" (id: {}).",
+        canvas.title, canvas.id
+    )))
+}
+
+async fn handle_canvas_update_tool(
+    state: &AppState,
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    thread_id: &str,
+    source_user_message_index: Option<usize>,
+    canvas_context: Option<&CanvasPromptContext>,
+    request: &PendingToolCallRequest,
+) -> anyhow::Result<serde_json::Value> {
+    let args: CanvasUpdateToolArgs = serde_json::from_value(request.arguments.clone())?;
+    let canvas_id = args
+        .canvas_id
+        .as_deref()
+        .or_else(|| canvas_context.and_then(|canvas| canvas.canvas_id.as_deref()))
+        .context("canvas.update requires canvasId when there is no active canvas context")?;
+    let normalized_title = args
+        .title
+        .as_deref()
+        .map(canvas_store::normalize_canvas_title)
+        .transpose()?;
+    let canvas = canvas_store::update_canvas(
+        &state.db,
+        thread_id,
+        canvas_id,
+        normalized_title.as_deref(),
+        Some(&args.content),
+        source_user_message_index,
+    )
+    .await?
+    .with_context(|| format!("Canvas {canvas_id} was not found"))?;
+    emit_canvas_sync(
+        tx,
+        &state.db,
+        thread_id,
+        Some(canvas.id.as_str()),
+        args.open.or(Some(true)),
+    )
+    .await?;
+    Ok(tool_success_result(format!(
+        "Updated canvas \"{}\" (id: {}).",
+        canvas.title, canvas.id
+    )))
+}
+
+async fn handle_canvas_list_tool(
+    state: &AppState,
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    thread_id: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let canvases = canvas_store::list_canvases(&state.db, thread_id).await?;
+    let summary = if canvases.is_empty() {
+        "No canvases exist for this thread yet.".to_string()
+    } else {
+        canvases
+            .iter()
+            .map(|canvas| format!("- {} ({}, id: {})", canvas.title, canvas.kind, canvas.id))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let _ = tx
+        .send(Ok(make_event(&json!({
+            "type": "canvas_sync",
+            "canvases": canvases,
+        }))))
+        .await;
+    Ok(tool_success_result(summary))
+}
+
+async fn handle_canvas_open_tool(
+    state: &AppState,
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    thread_id: &str,
+    request: &PendingToolCallRequest,
+) -> anyhow::Result<serde_json::Value> {
+    let args: CanvasOpenToolArgs = serde_json::from_value(request.arguments.clone())?;
+    let canvases = canvas_store::list_canvases(&state.db, thread_id).await?;
+    let canvas = canvases
+        .iter()
+        .find(|canvas| canvas.id == args.canvas_id)
+        .cloned()
+        .with_context(|| format!("Canvas {} was not found", args.canvas_id))?;
+    let active_canvas_id = canvas.id.clone();
+    let _ = tx
+        .send(Ok(make_event(&json!({
+            "type": "canvas_sync",
+            "canvases": canvases,
+            "activeCanvasId": active_canvas_id,
+            "open": true,
+        }))))
+        .await;
+    Ok(tool_success_result(format!(
+        "Opened canvas \"{}\".\n\nCurrent content:\n{}",
+        canvas.title, canvas.content
+    )))
+}
+
+async fn handle_canvas_close_tool(
+    state: &AppState,
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    thread_id: &str,
+) -> anyhow::Result<serde_json::Value> {
+    emit_canvas_sync(tx, &state.db, thread_id, None, Some(false)).await?;
+    Ok(tool_success_result(
+        "Closed the canvas pane without deleting any saved canvas.".to_string(),
+    ))
+}
+
+async fn emit_canvas_sync(
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    db: &crate::db::Database,
+    thread_id: &str,
+    active_canvas_id: Option<&str>,
+    open: Option<bool>,
+) -> anyhow::Result<()> {
+    let canvases = canvas_store::list_canvases(db, thread_id).await?;
+    let mut payload = json!({
+        "type": "canvas_sync",
+        "canvases": canvases,
+    });
+    if let Some(active_canvas_id) = active_canvas_id {
+        payload["activeCanvasId"] = json!(active_canvas_id);
+    }
+    if let Some(open) = open {
+        payload["open"] = json!(open);
+    }
+    let _ = tx.send(Ok(make_event(&payload))).await;
+    Ok(())
+}
+
+fn tool_success_result(text_result_for_llm: String) -> serde_json::Value {
+    json!({
+        "textResultForLlm": text_result_for_llm,
+        "resultType": "success",
+        "toolTelemetry": {},
+    })
+}
+
+fn tool_failure_result(error: String, text_result_for_llm: &str) -> serde_json::Value {
+    json!({
+        "textResultForLlm": text_result_for_llm,
+        "resultType": "failure",
+        "error": error,
+        "toolTelemetry": {},
+    })
 }
 
 fn auto_decide_permission(

@@ -320,9 +320,9 @@ async fn load_thread_messages(
         .await
     {
         Ok(_) => {}
-        Err(error) if crate::copilot::sdk_client::SdkConnection::is_missing_session_error(&error) => {
+        Err(error) if crate::copilot::sdk_client::SdkConnection::is_resettable_session_error(&error) => {
             tracing::warn!(
-                "Stored Copilot session {} for thread {} no longer exists; clearing it.",
+                "Stored Copilot session {} for thread {} can no longer be resumed; clearing it.",
                 copilot_session_id,
                 thread.id
             );

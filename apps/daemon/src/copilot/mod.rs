@@ -9,7 +9,8 @@ use sdk_client::SdkConnection;
 
 pub use sdk_client::{
     PendingPermissionOption, PendingPermissionRequest, ReplayedMessage, SDK_PERMISSION_APPROVED,
-    SDK_PERMISSION_DENIED, SendPromptInput, SessionEvent, UserMessageAttachment,
+    SDK_PERMISSION_DENIED, PendingToolCallRequest, SendPromptInput, SessionEvent,
+    UserMessageAttachment,
 };
 
 pub struct CopilotManager {

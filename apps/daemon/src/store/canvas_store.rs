@@ -8,6 +8,22 @@ use uuid::Uuid;
 use crate::db::entities::{canvas_revisions, canvases};
 use crate::db::{now_iso, Database};
 
+pub fn normalize_canvas_title(title: &str) -> anyhow::Result<String> {
+    let trimmed = title.trim();
+    if trimmed.len() < 2 || trimmed.len() > 120 {
+        anyhow::bail!("Canvas title must be 2-120 characters.");
+    }
+    Ok(trimmed.to_string())
+}
+
+pub fn normalize_canvas_kind(kind: &str) -> anyhow::Result<String> {
+    let trimmed = kind.trim();
+    if trimmed.is_empty() || trimmed.len() > 40 {
+        anyhow::bail!("Canvas kind must be 1-40 characters.");
+    }
+    Ok(trimmed.to_string())
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CanvasDetail {

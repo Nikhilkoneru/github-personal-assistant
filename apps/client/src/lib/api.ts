@@ -122,11 +122,24 @@ export const getAuthCapabilities = () => fetchJson<AuthCapabilities>('/api/auth/
 export const getProjects = (sessionToken?: string) => fetchJson<{ projects: ProjectSummary[] }>('/api/projects', undefined, sessionToken);
 export const getProject = (projectId: string, sessionToken?: string) =>
   fetchJson<{ project: ProjectSummary }>(`/api/projects/${projectId}`, undefined, sessionToken);
-export const createProject = (payload: { name: string; description?: string }, sessionToken?: string) =>
+export const createProject = (payload: { name: string; description?: string; workspacePath?: string | null }, sessionToken?: string) =>
   fetchJson<{ project: ProjectSummary }>(
     '/api/projects',
     {
       method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    sessionToken,
+  );
+export const updateProject = (
+  projectId: string,
+  payload: { name?: string; description?: string; workspacePath?: string | null },
+  sessionToken?: string,
+) =>
+  fetchJson<{ project: ProjectSummary }>(
+    `/api/projects/${projectId}`,
+    {
+      method: 'PATCH',
       body: JSON.stringify(payload),
     },
     sessionToken,
@@ -175,7 +188,10 @@ export const updateThread = (
 export const getModels = (sessionToken?: string) => fetchJson<{ models: ModelOption[] }>('/api/models', undefined, sessionToken);
 export const getCopilotPreferences = (sessionToken: string) =>
   fetchJson<{ preferences: CopilotPreferences }>('/api/copilot/preferences', undefined, sessionToken);
-export const updateCopilotPreferences = (payload: CopilotPreferences, sessionToken: string) =>
+export const updateCopilotPreferences = (
+  payload: { approvalMode?: CopilotPreferences['approvalMode']; generalChatWorkspacePath?: string | null },
+  sessionToken: string,
+) =>
   fetchJson<{ preferences: CopilotPreferences }>(
     '/api/copilot/preferences',
     {

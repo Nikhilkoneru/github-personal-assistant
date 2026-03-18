@@ -163,6 +163,15 @@ button { cursor: pointer; }
   font-style: italic;
 }
 
+.sidebar-group-meta {
+  padding: 0 14px 6px 14px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Sidebar items */
 .sidebar-item {
   display: flex;
@@ -245,6 +254,10 @@ button { cursor: pointer; }
 }
 
 .sidebar-create-input:focus { outline: none; border-color: var(--primary); }
+
+.sidebar-create-path {
+  min-width: 0;
+}
 
 .sidebar-create-btn {
   background: none;
@@ -1207,6 +1220,19 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
 .modal-copy { color: var(--muted); font-size: 0.88rem; margin: 0; }
 .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .settings-block { display: flex; flex-direction: column; gap: 6px; }
+.settings-list { display: flex; flex-direction: column; gap: 10px; }
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.settings-row-copy { display: flex; flex-direction: column; gap: 4px; }
+.settings-row-title { font-size: 0.88rem; font-weight: 700; color: var(--text); }
+.settings-row-input { width: 100%; }
 .install-note { font-size: 0.82rem; color: var(--muted); }
 
 /* ── Responsive ── */

@@ -369,11 +369,7 @@ impl AcpConnection {
         }
     }
 
-    pub async fn new_session(&self) -> anyhow::Result<String> {
-        let cwd = std::env::current_dir()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
+    pub async fn new_session(&self, cwd: &str) -> anyhow::Result<String> {
         let resp = self
             .send_request(
                 "session/new",

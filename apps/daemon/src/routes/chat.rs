@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use crate::auth_middleware::require_session;
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::store::{attachment_store, preferences_store, thread_store};
+use crate::store::{attachment_store, preferences_store, thread_store, workspace_store};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -63,7 +63,7 @@ async fn abort_chat(
     Json(body): Json<AbortInput>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let session = require_session(&headers, &state.db, &state.config).await?;
-    let thread = thread_store::get_thread(&state.db, &session.user_id, &body.thread_id)
+    let thread = thread_store::get_thread(&state.db, &state.config, &session.user_id, &body.thread_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Thread not found.".into()))?;
 
@@ -82,7 +82,7 @@ async fn user_input(
     Json(body): Json<UserInputInput>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let session = require_session(&headers, &state.db, &state.config).await?;
-    let thread = thread_store::get_thread(&state.db, &session.user_id, &body.thread_id)
+    let thread = thread_store::get_thread(&state.db, &state.config, &session.user_id, &body.thread_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Thread not found.".into()))?;
     let session_id = thread.copilot_session_id.ok_or_else(|| {
@@ -120,7 +120,7 @@ async fn permission_response(
     Json(body): Json<PermissionInput>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let session = require_session(&headers, &state.db, &state.config).await?;
-    let thread = thread_store::get_thread(&state.db, &session.user_id, &body.thread_id)
+    let thread = thread_store::get_thread(&state.db, &state.config, &session.user_id, &body.thread_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Thread not found.".into()))?;
     let session_id = thread.copilot_session_id.ok_or_else(|| {
@@ -162,7 +162,7 @@ async fn stream_chat(
     Json(body): Json<ChatStreamInput>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
     let session = require_session(&headers, &state.db, &state.config).await?;
-    let thread = thread_store::get_thread(&state.db, &session.user_id, &body.thread_id)
+    let thread = thread_store::get_thread(&state.db, &state.config, &session.user_id, &body.thread_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Thread not found.".into()))?;
 
@@ -201,6 +201,7 @@ async fn stream_chat(
     thread_store::rename_thread_if_placeholder(&state.db, &thread.id, &title_preview).await?;
     thread_store::update_thread(
         &state.db,
+        &state.config,
         &session.user_id,
         &thread.id,
         None,
@@ -215,6 +216,11 @@ async fn stream_chat(
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(256);
     let state_clone = state.clone();
     let thread_id = thread.id.clone();
+    let workspace_path = workspace_store::ensure_runtime_workspace_directory(
+        &state.config,
+        &thread.workspace_path,
+    )
+    .map_err(|error| AppError::BadRequest(error.to_string()))?;
 
     tokio::spawn(async move {
         let conn = match state_clone.copilot.get_or_create_connection().await {
@@ -239,7 +245,7 @@ async fn stream_chat(
                     .await;
                 (existing_id.clone(), true)
             } else {
-                match conn.new_session().await {
+                match conn.new_session(&workspace_path).await {
                     Ok(id) => {
                         let _ = thread_store::update_thread_session(&state_clone.db, &thread_id, &id).await;
                         let _ = tx
@@ -259,7 +265,7 @@ async fn stream_chat(
                 }
             }
         } else {
-            match conn.new_session().await {
+            match conn.new_session(&workspace_path).await {
                 Ok(id) => {
                     let _ = thread_store::update_thread_session(&state_clone.db, &thread_id, &id).await;
                     let _ = tx
@@ -293,7 +299,14 @@ async fn stream_chat(
             }
         };
         if !attachment_ids.is_empty() {
-            match next_user_message_index(&conn, &acp_session_id, !session_was_resumed).await {
+            match next_user_message_index(
+                &conn,
+                &acp_session_id,
+                &workspace_path,
+                !session_was_resumed,
+            )
+            .await
+            {
                 Some(user_message_index) => {
                     if let Err(error) = attachment_store::save_message_attachments(
                         &state_clone.db,
@@ -455,6 +468,7 @@ fn make_event(data: &serde_json::Value) -> Event {
 async fn next_user_message_index(
     conn: &crate::copilot::acp_client::AcpConnection,
     session_id: &str,
+    workspace_path: &str,
     assume_empty: bool,
 ) -> Option<usize> {
     if assume_empty {
@@ -466,8 +480,10 @@ async fn next_user_message_index(
         return None;
     }
 
-    let cwd = std::env::current_dir().ok()?.to_string_lossy().to_string();
-    let replayed_messages = conn.load_session_messages(session_id, &cwd).await.ok()?;
+    let replayed_messages = conn
+        .load_session_messages(session_id, workspace_path)
+        .await
+        .ok()?;
     Some(
         replayed_messages
             .iter()
@@ -625,7 +641,7 @@ async fn process_server_request_notification(
         | "_server_request/session/request_permission"
         | "_server_request/session/request" => {
             if let Some(request) = conn.get_pending_permission(request_id).await {
-                let approval_mode = match preferences_store::get_preferences(&state.db).await {
+                let approval_mode = match preferences_store::get_preferences(&state.db, &state.config).await {
                     Ok(prefs) => prefs.approval_mode,
                     Err(error) => {
                         let _ = tx.send(Ok(make_event(&json!({

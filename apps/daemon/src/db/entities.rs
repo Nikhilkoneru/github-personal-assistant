@@ -186,6 +186,7 @@ pub mod projects {
         pub github_user_id: String,
         pub name: String,
         pub description: String,
+        pub workspace_path: Option<String>,
         pub created_at: String,
         pub updated_at: String,
     }
@@ -229,6 +230,7 @@ pub mod threads {
         pub id: String,
         pub github_user_id: String,
         pub project_id: Option<String>,
+        pub workspace_path: Option<String>,
         pub title: String,
         pub model: String,
         pub reasoning_effort: Option<String>,

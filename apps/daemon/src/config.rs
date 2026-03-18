@@ -172,6 +172,10 @@ impl Config {
         }
     }
 
+    pub fn default_general_chat_workspace_path(&self) -> PathBuf {
+        self.app_support_dir.join("workspaces").join("general-chat")
+    }
+
     pub fn to_env_file_contents(&self) -> String {
         let mut lines = vec![
             "# continuum daemon configuration".to_string(),

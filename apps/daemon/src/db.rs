@@ -7,7 +7,6 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use crate::config::Config;
 
 pub mod entities;
-pub mod migrations;
 
 pub struct Database {
     conn: DatabaseConnection,
@@ -36,7 +35,7 @@ impl Database {
             .await?;
         let conn = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool);
 
-        migrations::Migrator::up(&conn, None).await?;
+        migration::Migrator::up(&conn, None).await?;
 
         Ok(Self { conn })
     }

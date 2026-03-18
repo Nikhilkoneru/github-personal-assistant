@@ -30,6 +30,7 @@ import {
   getThread,
   getThreads,
   streamChat,
+  updateProject,
   updateThread,
   updateCopilotPreferences,
   uploadAttachment,
@@ -181,6 +182,10 @@ const mergeThreadDetailIntoLocal = (
   pendingPermissionRequests: thread.pendingPermissionRequests ?? existing?.pendingPermissionRequests ?? [],
 });
 const summarizeTitle = (prompt: string) => (prompt.length > 42 ? `${prompt.slice(0, 42)}...` : prompt);
+const trimToNull = (value: string) => {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+};
 
 function SettingsIcon() {
   return (
@@ -281,6 +286,7 @@ export default function App() {
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectWorkspacePath, setNewProjectWorkspacePath] = useState('');
   const [loading, setLoading] = useState(true);
   const [creatingProject, setCreatingProject] = useState(false);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
@@ -295,9 +301,16 @@ export default function App() {
   const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [isStandalone, setIsStandalone] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
-  const [copilotPreferences, setCopilotPreferences] = useState<CopilotPreferences>({ approvalMode: 'approve-all' });
+  const [copilotPreferences, setCopilotPreferences] = useState<CopilotPreferences>({
+    approvalMode: 'approve-all',
+    generalChatWorkspacePath: '',
+  });
   const [savingApprovalMode, setSavingApprovalMode] = useState(false);
+  const [generalChatWorkspaceDraft, setGeneralChatWorkspaceDraft] = useState('');
+  const [savingGeneralChatWorkspace, setSavingGeneralChatWorkspace] = useState(false);
   const [savingThreadConfigId, setSavingThreadConfigId] = useState<string | null>(null);
+  const [savingProjectWorkspaceId, setSavingProjectWorkspaceId] = useState<string | null>(null);
+  const [projectWorkspaceDrafts, setProjectWorkspaceDrafts] = useState<Record<string, string>>({});
   const [draggedChatId, setDraggedChatId] = useState<string | null>(null);
   const [dragOverGroupId, setDragOverGroupId] = useState<string | 'inbox' | 'new-project' | null>(null);
   const [movingChatId, setMovingChatId] = useState<string | null>(null);
@@ -349,8 +362,21 @@ export default function App() {
       setChats([]);
       setSelectedChatId(null);
       setDraft('');
+      setNewProjectWorkspacePath('');
+      setGeneralChatWorkspaceDraft('');
+      setProjectWorkspaceDrafts({});
     }
   }, [session]);
+
+  useEffect(() => {
+    setGeneralChatWorkspaceDraft(copilotPreferences.generalChatWorkspacePath);
+  }, [copilotPreferences.generalChatWorkspacePath]);
+
+  useEffect(() => {
+    setProjectWorkspaceDrafts(
+      Object.fromEntries(projects.map((project) => [project.id, project.workspacePath ?? ''])),
+    );
+  }, [projects]);
 
   const refreshConnectionState = useCallback(async () => {
     const storedOverride = await getApiUrlOverride();
@@ -534,6 +560,7 @@ export default function App() {
 
   const selectedChat = useMemo(() => chats.find((chat) => chat.id === selectedChatId) ?? chats[0] ?? null, [chats, selectedChatId]);
   const orderedChats = useMemo(() => [...chats].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)), [chats]);
+  const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const workspaceGroups = useMemo<WorkspaceGroup[]>(
     () => [
       {
@@ -555,7 +582,12 @@ export default function App() {
   const selectedReasoningEfforts = selectedModel?.supportedReasoningEfforts ?? [];
   const activeReasoningEffort =
     selectedChat?.reasoningEffort ?? selectedModel?.defaultReasoningEffort ?? selectedReasoningEfforts[0] ?? null;
-  const headerMeta = selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : '';
+  const headerMeta = [
+    selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : 'General chat',
+    selectedChat?.workspacePath ? `Workspace: ${selectedChat.workspacePath}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   useEffect(() => {
     messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' });
@@ -638,6 +670,50 @@ export default function App() {
       }
     },
     [session],
+  );
+
+  const handleGeneralChatWorkspaceSave = useCallback(async () => {
+    if (!session) {
+      return;
+    }
+
+    setSavingGeneralChatWorkspace(true);
+    setError(null);
+    try {
+      const payload = await updateCopilotPreferences(
+        { generalChatWorkspacePath: trimToNull(generalChatWorkspaceDraft) },
+        session.sessionToken,
+      );
+      setCopilotPreferences(payload.preferences);
+    } catch (workspaceError) {
+      setError(workspaceError instanceof Error ? workspaceError.message : 'Unable to update the general chat workspace.');
+    } finally {
+      setSavingGeneralChatWorkspace(false);
+    }
+  }, [generalChatWorkspaceDraft, session]);
+
+  const handleProjectWorkspaceSave = useCallback(
+    async (projectId: string) => {
+      if (!session) {
+        return;
+      }
+
+      setSavingProjectWorkspaceId(projectId);
+      setError(null);
+      try {
+        const payload = await updateProject(
+          projectId,
+          { workspacePath: trimToNull(projectWorkspaceDrafts[projectId] ?? '') },
+          session.sessionToken,
+        );
+        setProjects((current) => current.map((project) => (project.id === projectId ? payload.project : project)));
+      } catch (workspaceError) {
+        setError(workspaceError instanceof Error ? workspaceError.message : 'Unable to update the project workspace.');
+      } finally {
+        setSavingProjectWorkspaceId((current) => (current === projectId ? null : current));
+      }
+    },
+    [projectWorkspaceDrafts, session],
   );
 
   const handleThreadConfigChange = useCallback(
@@ -759,13 +835,20 @@ export default function App() {
     setCreatingProject(true);
     setError(null);
     try {
-      const payload = await createProject({ name: newProjectName.trim() }, session.sessionToken);
+      const payload = await createProject(
+        {
+          name: newProjectName.trim(),
+          workspacePath: trimToNull(newProjectWorkspacePath),
+        },
+        session.sessionToken,
+      );
       setProjects((current) => [payload.project, ...current]);
       if (chatIdToMove) {
         const moved = await updateThread(chatIdToMove, { projectId: payload.project.id }, session.sessionToken);
         upsertThreadSummary(moved.thread);
       }
       setNewProjectName('');
+      setNewProjectWorkspacePath('');
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : 'Unable to create project.');
     } finally {
@@ -773,7 +856,7 @@ export default function App() {
       setDraggedChatId(null);
         setDragOverGroupId(null);
       }
-  }, [newProjectName, session, upsertThreadSummary]);
+  }, [newProjectName, newProjectWorkspacePath, session, upsertThreadSummary]);
 
   const handleSelectChat = useCallback(
     async (chatId: string) => {
@@ -1333,6 +1416,68 @@ export default function App() {
           </select>
           <div className="helper-text">{savingApprovalMode ? 'Saving approval mode…' : approvalModeDescription}</div>
         </div>
+        <div className="settings-block">
+          <label className="modal-label" htmlFor="general-chat-workspace">General chat workspace</label>
+          <input
+            id="general-chat-workspace"
+            className="input"
+            value={generalChatWorkspaceDraft}
+            onChange={(event) => setGeneralChatWorkspaceDraft(event.target.value)}
+            placeholder="Uses the Continuum-managed general chat directory by default"
+          />
+          <div className="helper-text">
+            General chats run in this directory when they are not attached to a project workspace.
+          </div>
+          <div className="modal-actions">
+            <button
+              className="ghost-button"
+              onClick={() => setGeneralChatWorkspaceDraft(copilotPreferences.generalChatWorkspacePath)}
+              disabled={savingGeneralChatWorkspace}
+            >
+              Reset
+            </button>
+            <button
+              className="button"
+              onClick={() => void handleGeneralChatWorkspaceSave()}
+              disabled={savingGeneralChatWorkspace}
+            >
+              {savingGeneralChatWorkspace ? 'Saving…' : 'Save workspace'}
+            </button>
+          </div>
+        </div>
+        {projects.length ? (
+          <div className="settings-block">
+            <div className="modal-label">Project workspaces</div>
+            <div className="settings-list">
+              {projects.map((project) => (
+                <div key={project.id} className="settings-row">
+                  <div className="settings-row-copy">
+                    <div className="settings-row-title">{project.name}</div>
+                    <div className="helper-text">Leave blank to use the general chat workspace for new chats in this project.</div>
+                  </div>
+                  <input
+                    className="input settings-row-input"
+                    value={projectWorkspaceDrafts[project.id] ?? ''}
+                    onChange={(event) =>
+                      setProjectWorkspaceDrafts((current) => ({
+                        ...current,
+                        [project.id]: event.target.value,
+                      }))
+                    }
+                    placeholder="Absolute folder path"
+                  />
+                  <button
+                    className="ghost-button"
+                    onClick={() => void handleProjectWorkspaceSave(project.id)}
+                    disabled={savingProjectWorkspaceId === project.id}
+                  >
+                    {savingProjectWorkspaceId === project.id ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {daemonRuntime ? (
           <div className="settings-block">
             <div className="status-grid">
@@ -1460,6 +1605,12 @@ export default function App() {
                 value={newProjectName}
                 onChange={(event) => setNewProjectName(event.target.value)}
               />
+              <input
+                className="sidebar-create-input sidebar-create-path"
+                placeholder="Workspace path (optional)"
+                value={newProjectWorkspacePath}
+                onChange={(event) => setNewProjectWorkspacePath(event.target.value)}
+              />
               <button
                 className="sidebar-create-btn"
                 disabled={creatingProject || !newProjectName.trim()}
@@ -1484,6 +1635,13 @@ export default function App() {
                     <button className="sidebar-group-new" onClick={() => void handleCreateChat(group.id)}>+</button>
                   ) : null}
                 </div>
+                {group.isInbox ? (
+                  <div className="sidebar-group-meta">{copilotPreferences.generalChatWorkspacePath || 'General chat workspace'}</div>
+                ) : (
+                  projectById.get(group.id ?? '')?.workspacePath ? (
+                    <div className="sidebar-group-meta">{projectById.get(group.id ?? '')?.workspacePath}</div>
+                  ) : null
+                )}
                 {group.chats.length === 0 ? (
                   <div className="sidebar-group-empty">{draggedChatId ? 'Drop here' : 'No chats'}</div>
                 ) : (

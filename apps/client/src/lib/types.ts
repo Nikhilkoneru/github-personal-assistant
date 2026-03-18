@@ -87,6 +87,7 @@ export type CopilotApprovalMode = 'approve-all' | 'safer-defaults';
 
 export type CopilotPreferences = {
   approvalMode: CopilotApprovalMode;
+  generalChatWorkspacePath: string;
 };
 
 export type CopilotModelCapabilities = {
@@ -193,6 +194,7 @@ export type ProjectSummary = {
   id: string;
   name: string;
   description: string;
+  workspacePath?: string;
   updatedAt: string;
 };
 
@@ -278,6 +280,7 @@ export type ThreadSummary = {
   projectId?: string;
   projectName?: string;
   model: string;
+  workspacePath: string;
   updatedAt: string;
   createdAt: string;
   copilotSessionId?: string;

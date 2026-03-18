@@ -16,6 +16,7 @@ use crate::state::AppState;
 use crate::store::{
     attachment_store,
     thread_store::{self, ThreadSummary},
+    workspace_store,
 };
 
 #[derive(Clone, Serialize)]
@@ -112,7 +113,12 @@ async fn list(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let session = require_session(&headers, &state.db, &state.config).await?;
     let threads =
-        thread_store::list_threads(&state.db, &session.user_id, query.project_id.as_deref())
+        thread_store::list_threads(
+            &state.db,
+            &state.config,
+            &session.user_id,
+            query.project_id.as_deref(),
+        )
             .await?;
     Ok(Json(json!({ "threads": threads })))
 }
@@ -140,6 +146,7 @@ async fn create(
     });
     let thread = thread_store::create_thread(
         &state.db,
+        &state.config,
         &session.user_id,
         &state.config.default_model,
         body.project_id.as_deref(),
@@ -162,7 +169,7 @@ async fn get_detail(
     axum::extract::Query(query): axum::extract::Query<ThreadDetailQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let session = require_session(&headers, &state.db, &state.config).await?;
-    let thread = thread_store::get_thread(&state.db, &session.user_id, &thread_id)
+    let thread = thread_store::get_thread(&state.db, &state.config, &session.user_id, &thread_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Thread not found.".into()))?;
     let messages = load_thread_messages(&state, &thread)
@@ -195,7 +202,7 @@ async fn get_messages(
     axum::extract::Path(thread_id): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let session = require_session(&headers, &state.db, &state.config).await?;
-    let thread = thread_store::get_thread(&state.db, &session.user_id, &thread_id)
+    let thread = thread_store::get_thread(&state.db, &state.config, &session.user_id, &thread_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Thread not found.".into()))?;
 
@@ -281,6 +288,7 @@ async fn update(
     let session = require_session(&headers, &state.db, &state.config).await?;
     let thread = thread_store::update_thread(
         &state.db,
+        &state.config,
         &session.user_id,
         &thread_id,
         body.project_id.as_ref().map(|o| o.as_deref()),
@@ -306,11 +314,12 @@ async fn load_thread_messages(
         anyhow::bail!("Agent does not support session/load");
     }
 
-    let cwd = std::env::current_dir()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let replayed_messages = match conn.load_session_messages(copilot_session_id, &cwd).await {
+    let workspace_path =
+        workspace_store::ensure_runtime_workspace_directory(&state.config, &thread.workspace_path)?;
+    let replayed_messages = match conn
+        .load_session_messages(copilot_session_id, &workspace_path)
+        .await
+    {
         Ok(messages) => messages,
         Err(error) if is_missing_session_error(&error) => {
             tracing::warn!(

@@ -25,14 +25,17 @@ async fn get_preferences(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let _session = require_session(&headers, &state.db, &state.config).await?;
-    let prefs = preferences_store::get_preferences(&state.db).await?;
+    let prefs = preferences_store::get_preferences(&state.db, &state.config).await?;
     Ok(Json(json!({ "preferences": prefs })))
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SetPreferences {
-    approval_mode: String,
+    #[serde(default)]
+    approval_mode: Option<String>,
+    #[serde(default)]
+    general_chat_workspace_path: Option<Option<String>>,
 }
 
 async fn set_preferences(
@@ -41,11 +44,17 @@ async fn set_preferences(
     Json(body): Json<SetPreferences>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let _session = require_session(&headers, &state.db, &state.config).await?;
-    let mode = match body.approval_mode.as_str() {
+    let approval_mode = body.approval_mode.as_deref().map(|mode| match mode {
         "safer-defaults" => "safer-defaults",
         _ => "approve-all",
-    };
-    let prefs = preferences_store::set_approval_mode(&state.db, mode).await?;
+    });
+    let prefs = preferences_store::set_preferences(
+        &state.db,
+        &state.config,
+        approval_mode,
+        body.general_chat_workspace_path.as_ref().map(|value| value.as_deref()),
+    )
+    .await?;
     Ok(Json(json!({ "preferences": prefs })))
 }
 

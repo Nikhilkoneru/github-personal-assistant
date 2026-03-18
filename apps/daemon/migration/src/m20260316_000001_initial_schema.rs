@@ -1,13 +1,17 @@
-use sea_orm::ConnectionTrait;
 use sea_orm_migration::prelude::*;
 
 const INITIAL_SCHEMA_SQL: &str = include_str!("../../sql/schema.sql");
 
-#[derive(DeriveMigrationName)]
-pub struct M20260316_000001InitialSchema;
+pub struct Migration;
+
+impl MigrationName for Migration {
+    fn name(&self) -> &str {
+        "migrations"
+    }
+}
 
 #[async_trait::async_trait]
-impl MigrationTrait for M20260316_000001InitialSchema {
+impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
             .get_connection()
@@ -35,14 +39,5 @@ impl MigrationTrait for M20260316_000001InitialSchema {
             )
             .await?;
         Ok(())
-    }
-}
-
-pub struct Migrator;
-
-#[async_trait::async_trait]
-impl MigratorTrait for Migrator {
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(M20260316_000001InitialSchema)]
     }
 }

@@ -7,6 +7,7 @@ use serde_json::json;
 use crate::auth_middleware::require_session;
 use crate::error::AppError;
 use crate::state::AppState;
+use crate::store::workspace_store;
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/api/models", get(list_models))
@@ -22,7 +23,16 @@ async fn list_models(
     if let Ok(conn) = state.copilot.get_or_create_connection().await {
         // If no cached models yet, create a temporary session to populate them
         if conn.get_cached_models().await.is_none() {
-            let _ = conn.new_session().await;
+            let general_workspace = state
+                .config
+                .default_general_chat_workspace_path()
+                .to_string_lossy()
+                .to_string();
+            if let Ok(runtime_workspace) =
+                workspace_store::ensure_runtime_workspace_directory(&state.config, &general_workspace)
+            {
+                let _ = conn.new_session(&runtime_workspace).await;
+            }
         }
 
         if let Some(models_data) = conn.get_cached_models().await {

@@ -15,6 +15,15 @@ const toolStatusLabels = {
   failed: 'Failed',
 } satisfies Record<ChatToolActivity['status'], string>;
 
+/** Strip the canvas system-prompt wrapper so the user only sees their original request. */
+const stripCanvasWrapper = (text: string): string => {
+  // Pattern: wrapper starts with "The user wants to create/edit/revise…" and ends with "User request:\n<original>"
+  const marker = '\nUser request:\n';
+  const idx = text.lastIndexOf(marker);
+  if (idx !== -1) return text.slice(idx + marker.length).trim();
+  return text;
+};
+
 const formatToolPayload = (value?: string) => {
   if (!value) return undefined;
 
@@ -103,7 +112,7 @@ export function MessageBubble({ message, isStreaming, canvasReferences, onOpenCa
         ) : null}
 
         {message.content ? (
-          isUser ? <div className="msg-content">{message.content}</div> : <MarkdownContent content={message.content} className="msg-content markdown-content" />
+          isUser ? <div className="msg-content">{stripCanvasWrapper(message.content)}</div> : <MarkdownContent content={message.content} className="msg-content markdown-content" />
         ) : null}
 
         {toolActivities.length ? (

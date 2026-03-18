@@ -1191,6 +1191,7 @@ fn build_session_config(
         "requestPermission": true,
         "requestUserInput": true,
         "tools": build_canvas_tools(),
+        "excludedTools": [],
     });
     if let Some(model) = model.filter(|model| !model.trim().is_empty()) {
         config["model"] = json!(model);
@@ -1385,7 +1386,7 @@ async fn maybe_emit_v3_bridge_events(
 fn build_canvas_tools() -> Value {
     json!([
         {
-            "name": "canvas.create",
+            "name": "canvas_create",
             "description": "Create a new canvas artifact for the current chat thread and store its full content.",
             "parameters": {
                 "type": "object",
@@ -1400,7 +1401,7 @@ fn build_canvas_tools() -> Value {
             "skipPermission": true
         },
         {
-            "name": "canvas.update",
+            "name": "canvas_update",
             "description": "Update an existing canvas artifact by replacing its full content and optionally changing its title.",
             "parameters": {
                 "type": "object",
@@ -1415,7 +1416,7 @@ fn build_canvas_tools() -> Value {
             "skipPermission": true
         },
         {
-            "name": "canvas.list",
+            "name": "canvas_list",
             "description": "List the canvases available in the current chat thread.",
             "parameters": {
                 "type": "object",
@@ -1424,7 +1425,7 @@ fn build_canvas_tools() -> Value {
             "skipPermission": true
         },
         {
-            "name": "canvas.open",
+            "name": "canvas_open",
             "description": "Open an existing canvas in the UI so the user can focus on it.",
             "parameters": {
                 "type": "object",
@@ -1436,7 +1437,7 @@ fn build_canvas_tools() -> Value {
             "skipPermission": true
         },
         {
-            "name": "canvas.close",
+            "name": "canvas_close",
             "description": "Close the canvas pane in the UI without deleting any saved canvas.",
             "parameters": {
                 "type": "object",

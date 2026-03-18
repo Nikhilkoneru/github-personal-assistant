@@ -708,12 +708,7 @@ export default function App() {
   const selectedReasoningEfforts = selectedModel?.supportedReasoningEfforts ?? [];
   const activeReasoningEffort =
     selectedChat?.reasoningEffort ?? selectedModel?.defaultReasoningEffort ?? selectedReasoningEfforts[0] ?? null;
-  const headerMeta = [
-    selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : 'General chat',
-    selectedChat?.workspacePath ? `Workspace: ${selectedChat.workspacePath}` : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const headerMeta = selectedChat?.projectName ? `Project: ${selectedChat.projectName}` : 'General chat';
 
   useEffect(() => {
     messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' });
@@ -2099,7 +2094,7 @@ export default function App() {
               </IconButton>
               <div className="header-copy">
                 <h1 className="main-title">{selectedChat?.title ?? 'New chat'}</h1>
-                {headerMeta ? <div className="main-subtitle">{headerMeta}</div> : null}
+                {headerMeta ? <div className="main-subtitle" title={selectedChat?.workspacePath ?? undefined}>{headerMeta}</div> : null}
               </div>
             </div>
             <div className="main-header-actions">
@@ -2145,11 +2140,6 @@ export default function App() {
                     ))}
                   </select>
                 </label>
-              ) : null}
-              {selectedChat ? (
-                <button type="button" className="ghost-button" onClick={() => (canvasPaneOpen ? handleCloseCanvas() : handleOpenCanvas())}>
-                  {canvasPaneOpen ? 'Hide canvas' : 'Open canvas'}
-                </button>
               ) : null}
               <IconButton label="Start new chat" onClick={() => void handleCreateChat()}>
                 <PlusIcon />
@@ -2199,19 +2189,10 @@ export default function App() {
 
             {canvasPaneOpen ? (
               <CanvasPane
-                canvases={selectedCanvases}
-                activeCanvasId={activeCanvas?.id ?? null}
+                canvas={activeCanvas ?? null}
                 selection={canvasSelection}
                 saving={Boolean(activeCanvas && savingCanvasId === activeCanvas.id)}
-                onSelectCanvas={(canvasId) => {
-                  if (!selectedChat) {
-                    return;
-                  }
-                  setActiveCanvasIdByThread((current) => ({ ...current, [selectedChat.id]: canvasId }));
-                  setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: null }));
-                }}
                 onClose={handleCloseCanvas}
-                onCreateCanvas={() => void handleCreateBlankCanvas()}
                 onTitleChange={handleCanvasTitleChange}
                 onContentChange={handleCanvasContentChange}
                 onContentBlur={(canvasId, title, content) => void handlePersistCanvas(canvasId, title, content)}
@@ -2317,33 +2298,32 @@ export default function App() {
             ) : null}
 
             {selectedChat ? (
-              <div className="composer-targets">
+              <div className="composer-tools">
                 <button
                   type="button"
-                  className={`composer-target${composerTarget === 'chat' ? ' active' : ''}`}
-                  onClick={() => setComposerTarget('chat')}
-                >
-                  Chat
-                </button>
-                <button
-                  type="button"
-                  className={`composer-target${composerTarget === 'canvas' ? ' active' : ''}`}
+                  className={`composer-tool-chip${canvasPaneOpen ? ' active' : ''}`}
                   onClick={() => {
-                    handleOpenCanvas(activeCanvas?.id);
-                    setComposerTarget('canvas');
+                    if (canvasPaneOpen) {
+                      handleCloseCanvas();
+                    } else {
+                      handleOpenCanvas(activeCanvas?.id);
+                      setComposerTarget('canvas');
+                    }
                   }}
+                  title={canvasPaneOpen && activeCanvas ? `Canvas: ${activeCanvas.title}` : 'Open canvas editor'}
                 >
-                  Canvas
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 14.5 2h-13ZM1 3.5a.5.5 0 0 1 .5-.5H7v10H1.5a.5.5 0 0 1-.5-.5v-9ZM8 13V3h6.5a.5.5 0 0 1 .5.5v9a.5.5 0 0 1-.5.5H8Z" /></svg>
+                  Canvas{canvasPaneOpen ? ' \u2713' : ''}
                 </button>
-                <div className="helper-text">
-                  {activeCanvas && composerTarget === 'canvas'
-                    ? canvasSelection
-                      ? `Next edit targets the selected text in “${activeCanvas.title}”.`
-                      : `Next edit targets “${activeCanvas.title}”.`
-                    : canvasPaneOpen && activeCanvas
-                      ? `Canvas “${activeCanvas.title}” is open for context.`
-                      : 'Say “use canvas” to draft directly in the editor.'}
-                </div>
+                {canvasPaneOpen && activeCanvas ? (
+                  <div className="helper-text">
+                    {composerTarget === 'canvas'
+                      ? canvasSelection
+                        ? `Editing selected text in \u201c${activeCanvas.title}\u201d.`
+                        : `Editing \u201c${activeCanvas.title}\u201d.`
+                      : `Canvas \u201c${activeCanvas.title}\u201d open.`}
+                  </div>
+                ) : null}
               </div>
             ) : null}
 

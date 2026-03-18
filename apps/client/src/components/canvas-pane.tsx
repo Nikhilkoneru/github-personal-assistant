@@ -1,15 +1,10 @@
-import { useMemo } from 'react';
-
 import type { CanvasArtifact, CanvasSelection } from '../lib/types.js';
 
 type CanvasPaneProps = {
-  canvases: CanvasArtifact[];
-  activeCanvasId: string | null;
+  canvas: CanvasArtifact | null;
   selection: CanvasSelection | null;
   saving?: boolean;
-  onSelectCanvas: (canvasId: string) => void;
   onClose: () => void;
-  onCreateCanvas: () => void;
   onTitleChange: (canvasId: string, title: string) => void;
   onContentChange: (canvasId: string, content: string) => void;
   onContentBlur: (canvasId: string, title: string, content: string) => void;
@@ -18,64 +13,33 @@ type CanvasPaneProps = {
 };
 
 export function CanvasPane({
-  canvases,
-  activeCanvasId,
+  canvas,
   selection,
   saving,
-  onSelectCanvas,
   onClose,
-  onCreateCanvas,
   onTitleChange,
   onContentChange,
   onContentBlur,
   onSelectionChange,
   onCopy,
 }: CanvasPaneProps) {
-  const activeCanvas = useMemo(
-    () => canvases.find((canvas) => canvas.id === activeCanvasId) ?? canvases[0] ?? null,
-    [activeCanvasId, canvases],
-  );
-
   return (
     <aside className="canvas-pane">
-      <div className="canvas-pane-sidebar">
-        <div className="canvas-pane-sidebar-head">
-          <div>
-            <div className="status-label">Canvas</div>
-            <div className="helper-text">{canvases.length ? `${canvases.length} saved` : 'No canvases yet'}</div>
-          </div>
-          <button type="button" className="ghost-button" onClick={onCreateCanvas}>New</button>
-        </div>
-        <div className="canvas-list">
-          {canvases.length ? (
-            canvases.map((canvas) => (
-              <button
-                key={canvas.id}
-                type="button"
-                className={`canvas-list-item${canvas.id === activeCanvas?.id ? ' active' : ''}`}
-                onClick={() => onSelectCanvas(canvas.id)}
-              >
-                <span className="canvas-list-title">{canvas.title}</span>
-                <span className="canvas-list-meta">{canvas.kind} · r{canvas.latestRevisionNumber}</span>
-              </button>
-            ))
-          ) : (
-            <div className="canvas-empty">Use “New” or ask Copilot to use canvas.</div>
-          )}
-        </div>
-      </div>
-
       <div className="canvas-editor-shell">
         <div className="canvas-editor-header">
           <div className="canvas-editor-header-copy">
-            <div className="status-label">Open canvas</div>
-            <div className="helper-text">
-              {activeCanvas ? `${activeCanvas.kind} · revision ${activeCanvas.latestRevisionNumber}` : 'Select a canvas'}
-            </div>
+            {canvas ? (
+              <>
+                <div className="status-label">{canvas.title}</div>
+                <div className="helper-text">{canvas.kind} · revision {canvas.latestRevisionNumber}</div>
+              </>
+            ) : (
+              <div className="status-label">Canvas</div>
+            )}
           </div>
           <div className="canvas-editor-actions">
-            {activeCanvas ? (
-              <button type="button" className="ghost-button" onClick={() => onCopy(activeCanvas)}>
+            {canvas ? (
+              <button type="button" className="ghost-button" onClick={() => onCopy(canvas)}>
                 Copy
               </button>
             ) : null}
@@ -83,37 +47,37 @@ export function CanvasPane({
           </div>
         </div>
 
-        {activeCanvas ? (
+        {canvas ? (
           <>
             <input
               className="input canvas-title-input"
-              value={activeCanvas.title}
-              onChange={(event) => onTitleChange(activeCanvas.id, event.target.value)}
-              onBlur={(event) => onContentBlur(activeCanvas.id, event.target.value, activeCanvas.content)}
+              value={canvas.title}
+              onChange={(event) => onTitleChange(canvas.id, event.target.value)}
+              onBlur={(event) => onContentBlur(canvas.id, event.target.value, canvas.content)}
               aria-label="Canvas title"
               placeholder="Canvas title"
             />
             <textarea
               className="canvas-editor"
-              value={activeCanvas.content}
-              onChange={(event) => onContentChange(activeCanvas.id, event.target.value)}
-              onBlur={(event) => onContentBlur(activeCanvas.id, activeCanvas.title, event.target.value)}
+              value={canvas.content}
+              onChange={(event) => onContentChange(canvas.id, event.target.value)}
+              onBlur={(event) => onContentBlur(canvas.id, canvas.title, event.target.value)}
               onSelect={(event) => {
                 const target = event.currentTarget;
                 const start = target.selectionStart ?? 0;
                 const end = target.selectionEnd ?? 0;
                 if (end <= start) {
-                  onSelectionChange(activeCanvas.id, null);
+                  onSelectionChange(canvas.id, null);
                   return;
                 }
-                onSelectionChange(activeCanvas.id, {
+                onSelectionChange(canvas.id, {
                   start,
                   end,
                   text: target.value.slice(start, end),
                 });
               }}
-              spellCheck={activeCanvas.kind !== 'code'}
-              aria-label={`Canvas editor for ${activeCanvas.title}`}
+              spellCheck={canvas.kind !== 'code'}
+              aria-label={`Canvas editor for ${canvas.title}`}
             />
             <div className="canvas-footer">
               <div className="helper-text">
@@ -126,7 +90,7 @@ export function CanvasPane({
           </>
         ) : (
           <div className="canvas-empty canvas-empty--editor">
-            Create a canvas or open one from chat to start drafting here.
+            Ask the AI to use canvas, or it will open one automatically when drafting.
           </div>
         )}
       </div>

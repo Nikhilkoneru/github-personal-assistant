@@ -275,6 +275,22 @@ function SendIcon() {
   );
 }
 
+function ToolsIcon() {
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" />
+    </svg>
+  );
+}
+
+function CanvasIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 14.5 2h-13ZM1 3.5a.5.5 0 0 1 .5-.5H7v10H1.5a.5.5 0 0 1-.5-.5v-9ZM8 13V3h6.5a.5.5 0 0 1 .5.5v9a.5.5 0 0 1-.5.5H8Z" />
+    </svg>
+  );
+}
+
 function IconButton({
   label,
   onClick,
@@ -347,6 +363,8 @@ export default function App() {
   const [canvasPaneOpenByThread, setCanvasPaneOpenByThread] = useState<Record<string, boolean>>({});
   const [canvasSelectionByThread, setCanvasSelectionByThread] = useState<Record<string, CanvasSelection | null>>({});
   const [composerTarget, setComposerTarget] = useState<'chat' | 'canvas'>('chat');
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
+  const toolsMenuRef = useRef<HTMLDivElement>(null);
   const [savingCanvasId, setSavingCanvasId] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -668,6 +686,18 @@ export default function App() {
       setSidebarOpen(false);
     }
   }, [canvasPaneOpen]);
+
+  // Close tools menu on outside click
+  useEffect(() => {
+    if (!toolsMenuOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (toolsMenuRef.current && !toolsMenuRef.current.contains(event.target as Node)) {
+        setToolsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [toolsMenuOpen]);
 
   const canvasReferencesByUserMessageIndex = useMemo(() => {
     const next = new Map<number, CanvasArtifact[]>();
@@ -1988,13 +2018,8 @@ export default function App() {
 
           <div className="sidebar-header">
             <div className="sidebar-brand">
-              <img
-                className="brand-lockup"
-                src="./icons/continuum-lockup.svg"
-                alt="Continuum Chat"
-                width="152"
-                height="40"
-              />
+              <img className="brand-mark" src="./icons/continuum-mark.svg" alt="" aria-hidden="true" width="28" height="28" />
+              <span className="brand-wordmark">Continuum</span>
             </div>
             <div className="sidebar-header-actions">
               <IconButton label="Start new chat" onClick={() => void handleCreateChat()}>
@@ -2297,33 +2322,21 @@ export default function App() {
               </div>
             ) : null}
 
-            {selectedChat ? (
-              <div className="composer-tools">
+            {canvasPaneOpen && activeCanvas && selectedChat ? (
+              <div className="composer-active-tool">
+                <CanvasIcon size={14} />
+                <span className="composer-active-tool-label">{activeCanvas.title}</span>
+                <span className="composer-active-tool-meta">
+                  {composerTarget === 'canvas'
+                    ? canvasSelection ? 'Editing selection' : 'Editing'
+                    : 'Open'}
+                </span>
                 <button
                   type="button"
-                  className={`composer-tool-chip${canvasPaneOpen ? ' active' : ''}`}
-                  onClick={() => {
-                    if (canvasPaneOpen) {
-                      handleCloseCanvas();
-                    } else {
-                      handleOpenCanvas(activeCanvas?.id);
-                      setComposerTarget('canvas');
-                    }
-                  }}
-                  title={canvasPaneOpen && activeCanvas ? `Canvas: ${activeCanvas.title}` : 'Open canvas editor'}
-                >
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 14.5 2h-13ZM1 3.5a.5.5 0 0 1 .5-.5H7v10H1.5a.5.5 0 0 1-.5-.5v-9ZM8 13V3h6.5a.5.5 0 0 1 .5.5v9a.5.5 0 0 1-.5.5H8Z" /></svg>
-                  Canvas{canvasPaneOpen ? ' \u2713' : ''}
-                </button>
-                {canvasPaneOpen && activeCanvas ? (
-                  <div className="helper-text">
-                    {composerTarget === 'canvas'
-                      ? canvasSelection
-                        ? `Editing selected text in \u201c${activeCanvas.title}\u201d.`
-                        : `Editing \u201c${activeCanvas.title}\u201d.`
-                      : `Canvas \u201c${activeCanvas.title}\u201d open.`}
-                  </div>
-                ) : null}
+                  className="composer-active-tool-close"
+                  onClick={handleCloseCanvas}
+                  aria-label="Close canvas"
+                >×</button>
               </div>
             ) : null}
 
@@ -2337,6 +2350,42 @@ export default function App() {
               >
                 <PaperclipIcon />
               </button>
+              <div className="composer-tools-anchor" ref={toolsMenuRef}>
+                <button
+                  type="button"
+                  className={`composer-btn${canvasPaneOpen ? ' composer-btn--active' : ''}`}
+                  onClick={() => setToolsMenuOpen((open) => !open)}
+                  aria-label="Tools"
+                  aria-expanded={toolsMenuOpen}
+                >
+                  <ToolsIcon />
+                </button>
+                {toolsMenuOpen ? (
+                  <div className="tools-menu">
+                    <div className="tools-menu-header">Tools</div>
+                    <button
+                      type="button"
+                      className={`tools-menu-item${canvasPaneOpen ? ' active' : ''}`}
+                      onClick={() => {
+                        if (canvasPaneOpen) {
+                          handleCloseCanvas();
+                        } else {
+                          handleOpenCanvas(activeCanvas?.id);
+                          setComposerTarget('canvas');
+                        }
+                        setToolsMenuOpen(false);
+                      }}
+                    >
+                      <CanvasIcon size={16} />
+                      <div className="tools-menu-item-copy">
+                        <span className="tools-menu-item-name">Canvas</span>
+                        <span className="tools-menu-item-desc">Draft & edit documents side-by-side</span>
+                      </div>
+                      {canvasPaneOpen ? <span className="tools-menu-check">✓</span> : null}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
               <textarea
                 ref={composerRef}
                 className="composer-input"

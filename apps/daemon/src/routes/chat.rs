@@ -105,6 +105,8 @@ struct CanvasUpdateToolArgs {
     title: Option<String>,
     content: String,
     #[serde(default)]
+    selection_replace: Option<bool>,
+    #[serde(default)]
     open: Option<bool>,
 }
 
@@ -515,10 +517,10 @@ User request:\n{prompt}"
                 format!(
                     "The user wants to edit the selected portion of a {kind} canvas titled \"{title}\"{identifier}.\n\
 Current canvas content:\n<<<CANVAS\n{current_content}\nCANVAS\n\n\
-Selected range: {start}-{end}\n\
-Selected text:\n<<<SELECTION\n{selection_text}\nSELECTION\n\n\
-Prefer using the `canvas.update` tool for the actual mutation. Send the full updated canvas content in the tool call.\n\
-If you also reply in chat, keep it brief and do not repeat the full document inline.\n\n\
+Selected range (character offsets {start}–{end}):\n<<<SELECTION\n{selection_text}\nSELECTION\n\n\
+IMPORTANT: Call `canvas_update` with `selectionReplace: true` and set `content` to ONLY the replacement text for the selected range. \
+Do NOT send the full document — the backend will splice your replacement into the original at the selection boundaries.\n\
+If you also reply in chat, keep it brief and do not repeat the content inline.\n\n\
 User request:\n{prompt}",
                     start = selection.start,
                     end = selection.end,
@@ -942,12 +944,36 @@ async fn handle_canvas_update_tool(
         .as_deref()
         .map(canvas_store::normalize_canvas_title)
         .transpose()?;
+
+    // Determine final content: inline splice vs full replacement
+    let final_content = if args.selection_replace.unwrap_or(false) {
+        if let Some(sel) = canvas_context.and_then(|c| c.selection.as_ref()) {
+            if let Some(base) = canvas_context.and_then(|c| c.current_content.as_deref()) {
+                let char_count = base.chars().count();
+                let start = sel.start.min(char_count);
+                let end = sel.end.min(char_count).max(start);
+                // Convert char offsets to byte offsets for string slicing
+                let byte_start = base.char_indices().nth(start).map(|(i, _)| i).unwrap_or(base.len());
+                let byte_end = base.char_indices().nth(end).map(|(i, _)| i).unwrap_or(base.len());
+                format!("{}{}{}", &base[..byte_start], args.content, &base[byte_end..])
+            } else {
+                // No base content available — fall back to full replacement
+                args.content.clone()
+            }
+        } else {
+            // selectionReplace=true but no selection context — fall back to full replacement
+            args.content.clone()
+        }
+    } else {
+        args.content.clone()
+    };
+
     let canvas = canvas_store::update_canvas(
         &state.db,
         thread_id,
         canvas_id,
         normalized_title.as_deref(),
-        Some(&args.content),
+        Some(&final_content),
         source_user_message_index,
     )
     .await?

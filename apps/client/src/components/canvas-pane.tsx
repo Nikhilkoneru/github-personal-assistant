@@ -92,7 +92,7 @@ export function CanvasPane({
               />
               {selection ? (
                 <div className="canvas-selection-hint">
-                  {selection.end - selection.start} chars selected — type in chat to edit this section
+                  {selection.end - selection.start} chars selected — use the edit bar below to update this section
                 </div>
               ) : null}
             </>
@@ -104,7 +104,7 @@ export function CanvasPane({
         </div>
       ) : (
         <div className="canvas-empty canvas-empty--editor">
-          Ask the AI to use canvas, or it will open one automatically when drafting.
+          Ask the assistant to create or update a canvas, then edit it here like a document.
         </div>
       )}
 

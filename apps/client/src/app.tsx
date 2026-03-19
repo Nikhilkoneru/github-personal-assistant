@@ -344,13 +344,17 @@ export default function App() {
   const [activeCanvasIdByThread, setActiveCanvasIdByThread] = useState<Record<string, string | null>>({});
   const [canvasPaneOpenByThread, setCanvasPaneOpenByThread] = useState<Record<string, boolean>>({});
   const [canvasSelectionByThread, setCanvasSelectionByThread] = useState<Record<string, CanvasSelection | null>>({});
-  const [composerTarget, setComposerTarget] = useState<'chat' | 'canvas'>('chat');
+  const [selectionPromptDraftByThread, setSelectionPromptDraftByThread] = useState<Record<string, string>>({});
   const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
   const toolsMenuRef = useRef<HTMLDivElement>(null);
   const [savingCanvasId, setSavingCanvasId] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const selectionPromptInputRef = useRef<HTMLInputElement | null>(null);
+  const [isNarrowViewport, setIsNarrowViewport] = useState(
+    () => (typeof window !== 'undefined' ? window.matchMedia('(max-width: 960px)').matches : false),
+  );
   const chatsRef = useRef<LocalChat[]>([]);
   chatsRef.current = chats;
   const selectedChatIdRef = useRef<string | null>(null);
@@ -396,7 +400,7 @@ export default function App() {
       setActiveCanvasIdByThread({});
       setCanvasPaneOpenByThread({});
       setCanvasSelectionByThread({});
-      setComposerTarget('chat');
+      setSelectionPromptDraftByThread({});
       setDraft('');
       setNewProjectWorkspacePath('');
       setGeneralChatWorkspaceDraft('');
@@ -662,12 +666,38 @@ export default function App() {
   );
   const canvasPaneOpen = selectedChat ? canvasPaneOpenByThread[selectedChat.id] ?? false : false;
   const canvasSelection = selectedChat ? canvasSelectionByThread[selectedChat.id] ?? null : null;
+  const selectionPromptDraft = selectedChat ? selectionPromptDraftByThread[selectedChat.id] ?? '' : '';
 
   useEffect(() => {
     if (canvasPaneOpen) {
       setSidebarOpen(false);
     }
   }, [canvasPaneOpen]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const media = window.matchMedia('(max-width: 960px)');
+    const updateViewport = (matches: boolean) => setIsNarrowViewport(matches);
+    updateViewport(media.matches);
+
+    const handleChange = (event: MediaQueryListEvent) => updateViewport(event.matches);
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', handleChange);
+      return () => media.removeEventListener('change', handleChange);
+    }
+
+    media.addListener(handleChange);
+    return () => media.removeListener(handleChange);
+  }, []);
+
+  useEffect(() => {
+    if (canvasSelection) {
+      selectionPromptInputRef.current?.focus();
+    }
+  }, [canvasSelection, selectedChat?.id]);
 
   // Close tools menu on outside click
   useEffect(() => {
@@ -998,6 +1028,12 @@ export default function App() {
     async (chatId: string) => {
       setSelectedChatId(chatId);
       setSidebarOpen(false);
+      setToolsMenuOpen(false);
+      if (isNarrowViewport) {
+        setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: false }));
+        setCanvasSelectionByThread((current) => ({ ...current, [chatId]: null }));
+        setSelectionPromptDraftByThread((current) => ({ ...current, [chatId]: '' }));
+      }
       const chat = chats.find((item) => item.id === chatId);
       if (chat?.hasLoadedMessages) {
         return;
@@ -1008,7 +1044,7 @@ export default function App() {
         setError(loadError instanceof Error ? loadError.message : 'Unable to load that chat.');
       }
     },
-    [chats, loadThreadDetail],
+    [chats, isNarrowViewport, loadThreadDetail],
   );
 
   const handleOpenCanvas = useCallback(
@@ -1022,7 +1058,6 @@ export default function App() {
       } else if (selectedCanvases[0]) {
         setActiveCanvasIdByThread((current) => ({ ...current, [selectedChat.id]: current[selectedChat.id] ?? selectedCanvases[0].id }));
       }
-      setComposerTarget('canvas');
     },
     [selectedChat, selectedCanvases],
   );
@@ -1033,7 +1068,7 @@ export default function App() {
     }
     setCanvasPaneOpenByThread((current) => ({ ...current, [selectedChat.id]: false }));
     setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: null }));
-    setComposerTarget('chat');
+    setSelectionPromptDraftByThread((current) => ({ ...current, [selectedChat.id]: '' }));
   }, [selectedChat]);
 
   const handleCreateBlankCanvas = useCallback(async () => {
@@ -1054,7 +1089,6 @@ export default function App() {
       upsertCanvasForThread(selectedChat.id, payload.canvas);
       setActiveCanvasIdByThread((current) => ({ ...current, [selectedChat.id]: payload.canvas.id }));
       setCanvasPaneOpenByThread((current) => ({ ...current, [selectedChat.id]: true }));
-      setComposerTarget('canvas');
     } catch (canvasError) {
       setError(canvasError instanceof Error ? canvasError.message : 'Unable to create canvas.');
     }
@@ -1090,6 +1124,14 @@ export default function App() {
     }
     setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: nextSelection }));
   }, [activeCanvasId, selectedChat]);
+
+  const handleClearCanvasSelection = useCallback(() => {
+    if (!selectedChat) {
+      return;
+    }
+    setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: null }));
+    setSelectionPromptDraftByThread((current) => ({ ...current, [selectedChat.id]: '' }));
+  }, [selectedChat]);
 
   const handlePersistCanvas = useCallback(
     async (canvasId: string, title: string, content: string) => {
@@ -1225,12 +1267,12 @@ export default function App() {
     [selectedChat, updateChat],
   );
 
-  const handleSend = useCallback(async () => {
-    if (!session || !selectedChat || !draft.trim() || streamingChatIds.has(selectedChat.id)) {
+  const handleSend = useCallback(async (promptOverride?: string, canvasModeOverride: 'chat' | 'create' | 'update' = 'chat') => {
+    const prompt = (promptOverride ?? draft).trim();
+    if (!session || !selectedChat || !prompt || streamingChatIds.has(selectedChat.id)) {
       return;
     }
 
-    const prompt = draft.trim();
     const chatId = selectedChat.id;
     const model = selectedChat.model || defaultModel;
     const reasoningEffort = selectedChat.reasoningEffort;
@@ -1240,12 +1282,12 @@ export default function App() {
     // Canvas context: only send if a canvas is currently open (purely as context for the LLM)
     const canvasContextForSend = canvasPaneOpen && activeCanvas
       ? {
-          mode: (composerTarget === 'canvas' ? 'update' : 'chat') as 'chat' | 'create' | 'update',
+          mode: canvasModeOverride,
           canvasId: activeCanvas.id,
           title: activeCanvas.title,
           kind: activeCanvas.kind,
           currentContent: activeCanvas.content,
-          selection: canvasSelection ?? undefined,
+          selection: canvasModeOverride === 'update' ? canvasSelection ?? undefined : undefined,
         }
       : undefined;
 
@@ -1318,7 +1360,9 @@ export default function App() {
       }, 16);
     };
 
-    setDraft('');
+    if (promptOverride === undefined) {
+      setDraft('');
+    }
     setError(null);
     setStreamingChatIds((prev) => new Set(prev).add(chatId));
 
@@ -1483,14 +1527,14 @@ export default function App() {
             }
             if (event.open !== undefined) {
               const shouldOpen = event.open;
-              setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: shouldOpen }));
-              if (!shouldOpen) {
-                setCanvasSelectionByThread((current) => ({ ...current, [chatId]: null }));
+                setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: shouldOpen }));
+                if (!shouldOpen) {
+                  setCanvasSelectionByThread((current) => ({ ...current, [chatId]: null }));
+                  setSelectionPromptDraftByThread((current) => ({ ...current, [chatId]: '' }));
+                }
               }
-              setComposerTarget(shouldOpen ? 'canvas' : 'chat');
+              return;
             }
-            return;
-          }
           if (event.type === 'user_input_request') {
             updateChat(chatId, (chat) => ({
               ...chat,
@@ -1615,19 +1659,26 @@ export default function App() {
     activeCanvas,
     canvasPaneOpen,
     canvasSelection,
-    composerTarget,
     defaultModel,
     draft,
     replaceThreadCanvases,
-    removeCanvasForThread,
-    selectedCanvases.length,
     selectedChat,
+    setSelectionPromptDraftByThread,
     session,
     signOut,
     streamingChatIds,
     updateChat,
-    upsertCanvasForThread,
   ]);
+
+  const handleSubmitSelectionPrompt = useCallback(async () => {
+    if (!selectedChat || !canvasSelection || !selectionPromptDraft.trim()) {
+      return;
+    }
+
+    await handleSend(selectionPromptDraft, 'update');
+    setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: null }));
+    setSelectionPromptDraftByThread((current) => ({ ...current, [selectedChat.id]: '' }));
+  }, [canvasSelection, handleSend, selectedChat, selectionPromptDraft]);
 
   const handleAbortStreaming = useCallback(async () => {
     if (!session || !selectedChat || !streamingChatIds.has(selectedChat.id)) {
@@ -1677,14 +1728,6 @@ export default function App() {
     ? daemonRuntime.copilot.version ?? daemonRuntime.copilot.path ?? 'Installed'
     : 'Not found';
   const isSelectedChatStreaming = Boolean(selectedChat && streamingChatIds.has(selectedChat.id));
-
-  useEffect(() => {
-    if (!selectedChat) {
-      setComposerTarget('chat');
-      return;
-    }
-    setComposerTarget((canvasPaneOpenByThread[selectedChat.id] ?? false) ? 'canvas' : 'chat');
-  }, [canvasPaneOpenByThread, selectedChat]);
 
   // Auto-grow composer textarea
   useEffect(() => {
@@ -1996,49 +2039,6 @@ export default function App() {
                 {headerMeta ? <div className="main-subtitle" title={selectedChat?.workspacePath ?? undefined}>{headerMeta}</div> : null}
               </div>
             </div>
-            <div className="main-header-actions">
-              <label className="header-model-field" htmlFor="header-model">
-                <select
-                  id="header-model"
-                  className="header-model-pill"
-                  value={activeModelId}
-                  onChange={(event) => {
-                    if (!selectedChat) return;
-                    const nextModelId = event.target.value;
-                    const nextModel = models.find((model) => model.id === nextModelId);
-                    const nextReasoningEffort =
-                      nextModel?.capabilities?.supports.reasoningEffort
-                        ? selectedChat.reasoningEffort && nextModel.supportedReasoningEfforts?.includes(selectedChat.reasoningEffort)
-                          ? selectedChat.reasoningEffort
-                          : nextModel.defaultReasoningEffort ?? nextModel.supportedReasoningEfforts?.[0] ?? null
-                        : null;
-                    void handleThreadConfigChange(selectedChat.id, { model: nextModelId, reasoningEffort: nextReasoningEffort });
-                  }}
-                  disabled={!selectedChat || !models.length || savingThreadConfigId === selectedChat?.id}
-                >
-                  {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-                </select>
-              </label>
-              {selectedChat && selectedModel?.capabilities?.supports.reasoningEffort ? (
-                <label className="header-model-field" htmlFor="header-reasoning">
-                  <select
-                    id="header-reasoning"
-                    className="header-model-pill header-model-pill--thinking"
-                    value={activeReasoningEffort ?? ''}
-                    onChange={(event) =>
-                      void handleThreadConfigChange(selectedChat.id, {
-                        reasoningEffort: (event.target.value || null) as ReasoningEffort | null,
-                      })
-                    }
-                    disabled={!selectedReasoningEfforts.length || savingThreadConfigId === selectedChat.id}
-                  >
-                    {selectedReasoningEfforts.map((effort) => (
-                      <option key={effort} value={effort}>{effort}</option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-            </div>
           </header>
 
           <div className={`main-body${canvasPaneOpen ? ' main-body--with-canvas' : ''}`}>
@@ -2178,6 +2178,106 @@ export default function App() {
               </div>
             ) : null}
 
+            {selectedChat ? (
+              <div className="composer-config-row">
+                <label className="composer-config-field" htmlFor="composer-model">
+                  <span className="composer-config-label">Model</span>
+                  <select
+                    id="composer-model"
+                    className="composer-config-pill"
+                    value={activeModelId}
+                    onChange={(event) => {
+                      if (!selectedChat) {
+                        return;
+                      }
+                      const nextModelId = event.target.value;
+                      const nextModel = models.find((model) => model.id === nextModelId);
+                      const nextReasoningEffort =
+                        nextModel?.capabilities?.supports.reasoningEffort
+                          ? selectedChat.reasoningEffort && nextModel.supportedReasoningEfforts?.includes(selectedChat.reasoningEffort)
+                            ? selectedChat.reasoningEffort
+                            : nextModel.defaultReasoningEffort ?? nextModel.supportedReasoningEfforts?.[0] ?? null
+                          : null;
+                      void handleThreadConfigChange(selectedChat.id, { model: nextModelId, reasoningEffort: nextReasoningEffort });
+                    }}
+                    disabled={!models.length || savingThreadConfigId === selectedChat.id}
+                  >
+                    {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+                  </select>
+                </label>
+                {selectedModel?.capabilities?.supports.reasoningEffort ? (
+                  <label className="composer-config-field" htmlFor="composer-reasoning">
+                    <span className="composer-config-label">Thinking</span>
+                    <select
+                      id="composer-reasoning"
+                    className="composer-config-pill composer-config-pill--thinking"
+                    value={activeReasoningEffort ?? ''}
+                      onChange={(event) => {
+                        if (!selectedChat) {
+                          return;
+                        }
+                        void handleThreadConfigChange(selectedChat.id, {
+                          reasoningEffort: (event.target.value || null) as ReasoningEffort | null,
+                        });
+                      }}
+                      disabled={!selectedReasoningEfforts.length || savingThreadConfigId === selectedChat.id}
+                    >
+                      {selectedReasoningEfforts.map((effort) => (
+                        <option key={effort} value={effort}>{effort}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+
+            {canvasPaneOpen && canvasSelection ? (
+              <div className="selection-prompt-card">
+                <div className="selection-prompt-header">
+                  <div>
+                    <div className="selection-prompt-title">Edit selection</div>
+                    <div className="selection-prompt-meta">
+                      {canvasSelection.end - canvasSelection.start} chars selected{activeCanvas ? ` in ${activeCanvas.title}` : ''}
+                    </div>
+                  </div>
+                  <button type="button" className="selection-prompt-dismiss" onClick={handleClearCanvasSelection}>
+                    Dismiss
+                  </button>
+                </div>
+                <div className="selection-prompt-bar">
+                  <input
+                    ref={selectionPromptInputRef}
+                    className="selection-prompt-input"
+                    value={selectionPromptDraft}
+                    onChange={(event) =>
+                      setSelectionPromptDraftByThread((current) => ({
+                        ...current,
+                        [selectedChat!.id]: event.target.value,
+                      }))
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        void handleSubmitSelectionPrompt();
+                      } else if (event.key === 'Escape') {
+                        event.preventDefault();
+                        handleClearCanvasSelection();
+                      }
+                    }}
+                    placeholder="How should this selection change?"
+                  />
+                  <button
+                    type="button"
+                    className="selection-prompt-submit"
+                    onClick={() => void handleSubmitSelectionPrompt()}
+                    disabled={!selectionPromptDraft.trim() || isSelectedChatStreaming}
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             <div className="composer-bar">
               <button
                 type="button"
@@ -2209,7 +2309,6 @@ export default function App() {
                           handleCloseCanvas();
                         } else {
                           handleOpenCanvas(activeCanvas?.id);
-                          setComposerTarget('canvas');
                         }
                         setToolsMenuOpen(false);
                       }}

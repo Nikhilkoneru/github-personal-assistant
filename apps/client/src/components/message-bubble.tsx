@@ -57,12 +57,6 @@ export function MessageBubble({ message, isStreaming, canvasReferences, onOpenCa
   const toolActivities = [...(message.metadata?.toolActivities ?? [])].sort(
     (left, right) => new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime(),
   );
-  const usage = message.metadata?.usage;
-
-  const usageParts: string[] = [];
-  if (usage?.inputTokens) usageParts.push(`${usage.inputTokens.toLocaleString()} in`);
-  if (usage?.outputTokens) usageParts.push(`${usage.outputTokens.toLocaleString()} out`);
-  if (typeof usage?.duration === 'number') usageParts.push(`${(usage.duration / 1000).toFixed(1)}s`);
 
   return (
     <div className={`msg${isUser ? ' msg--user' : ''}${isError ? ' msg--error' : ''}`}>
@@ -224,7 +218,6 @@ export function MessageBubble({ message, isStreaming, canvasReferences, onOpenCa
 
         <div className="msg-footer">
           <time className="msg-time">{formatTime(message.createdAt)}</time>
-          {usageParts.length ? <span className="msg-usage" title={usageParts.join(' · ')}>{usageParts.join(' · ')}</span> : null}
         </div>
       </div>
     </div>

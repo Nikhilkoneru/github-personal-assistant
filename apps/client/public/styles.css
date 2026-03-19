@@ -318,7 +318,7 @@ button { cursor: pointer; }
 
 .main-body--with-canvas {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 42%);
+  grid-template-columns: minmax(300px, 35%) minmax(0, 1fr);
   gap: 0;
 }
 
@@ -1230,90 +1230,144 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--border);
-  background: var(--panel);
+  background: var(--bg);
+  position: relative;
 }
 
-.canvas-toolbar {
+/* ── Canvas header: X | title | actions ── */
+.canvas-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
+  min-height: 48px;
 }
-.canvas-toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.canvas-toolbar-btn {
+.canvas-header-center {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  gap: 6px;
+  min-width: 0;
+}
+.canvas-header-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+.canvas-saving-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: pulse-dot 1s infinite;
+  flex-shrink: 0;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.canvas-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.canvas-header-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
   border: none;
   background: transparent;
   color: var(--muted);
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   transition: background 100ms, color 100ms;
 }
-.canvas-toolbar-btn:hover { background: rgba(255,255,255,0.06); color: var(--text); }
-.canvas-toolbar-btn--active { color: var(--primary); background: rgba(56,139,253,0.1); }
-.canvas-saving { font-size: 0.7rem; color: var(--muted); }
+.canvas-header-btn:hover { background: rgba(255,255,255,0.06); color: var(--text); }
 
+/* ── Canvas document body ── */
 .canvas-document {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  position: relative;
 }
 
-/* Rendered markdown view — feels like a real document */
 .canvas-rendered {
   flex: 1;
-  padding: 24px 28px;
+  padding: 40px 56px;
   cursor: text;
   min-height: 200px;
   overflow-y: auto;
 }
 .canvas-markdown {
   color: var(--text);
-  font-size: 0.92rem;
-  line-height: 1.7;
+  font-size: 1rem;
+  line-height: 1.75;
+  max-width: 720px;
+  margin: 0 auto;
 }
 .canvas-markdown h1, .canvas-markdown h2, .canvas-markdown h3 {
-  margin: 0.8em 0 0.4em;
-  font-weight: 600;
+  margin: 1em 0 0.5em;
+  font-weight: 700;
+  line-height: 1.3;
 }
-.canvas-markdown h1 { font-size: 1.4em; }
-.canvas-markdown h2 { font-size: 1.2em; }
-.canvas-markdown h3 { font-size: 1.05em; }
-.canvas-markdown p { margin: 0 0 0.8em; }
-.canvas-markdown ul, .canvas-markdown ol { margin: 0 0 0.8em; padding-left: 1.5em; }
-.canvas-markdown li { margin-bottom: 0.3em; }
+.canvas-markdown h1 { font-size: 1.75em; }
+.canvas-markdown h2 { font-size: 1.35em; }
+.canvas-markdown h3 { font-size: 1.1em; }
+.canvas-markdown p { margin: 0 0 1em; }
+.canvas-markdown ul, .canvas-markdown ol { margin: 0 0 1em; padding-left: 1.6em; }
+.canvas-markdown li { margin-bottom: 0.4em; }
 .canvas-markdown pre {
-  background: rgba(0,0,0,0.2);
-  border-radius: 8px;
-  padding: 12px;
+  background: rgba(0,0,0,0.25);
+  border-radius: 10px;
+  padding: 14px 16px;
   overflow-x: auto;
-  margin: 0.6em 0;
+  margin: 0.8em 0;
 }
 .canvas-markdown code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.88em;
+  font-size: 0.9em;
 }
 .canvas-markdown blockquote {
   border-left: 3px solid var(--border);
-  padding-left: 12px;
-  margin: 0.6em 0;
+  padding-left: 14px;
+  margin: 0.8em 0;
   color: var(--muted);
 }
 
-/* Edit mode textarea */
+/* ── Floating edit FAB ── */
+.canvas-fab {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.35);
+  transition: background 120ms, transform 120ms;
+  z-index: 5;
+}
+.canvas-fab:hover { background: var(--surface-hover); transform: scale(1.08); }
+
+/* ── Edit mode textarea ── */
 .canvas-editor {
   flex: 1;
   min-height: 260px;
@@ -1322,29 +1376,35 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  padding: 24px 28px;
+  padding: 40px 56px;
   resize: none;
   outline: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.88rem;
-  line-height: 1.55;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  max-width: 720px;
+  width: 100%;
+  align-self: center;
 }
 .canvas-editor:focus { border-color: transparent; }
 
 .canvas-selection-hint {
-  padding: 6px 28px 12px;
-  font-size: 0.72rem;
+  padding: 8px 56px 16px;
+  font-size: 0.75rem;
   color: var(--primary);
+  max-width: 720px;
+  align-self: center;
 }
 
 .canvas-empty {
   color: var(--muted);
-  font-size: 0.84rem;
+  font-size: 0.88rem;
   padding: 12px;
 }
 
 .canvas-empty--editor {
-  padding: 24px 18px;
+  padding: 40px 56px;
+  text-align: center;
 }
 
 .composer-send:hover { transform: scale(1.05); }
@@ -1679,6 +1739,9 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
     border-top: 1px solid var(--border);
     max-height: 50vh;
   }
+  .canvas-rendered { padding: 24px 20px; }
+  .canvas-editor { padding: 24px 20px; }
+  .canvas-selection-hint { padding: 8px 20px 16px; }
   .status-grid { grid-template-columns: 1fr; }
   .modal-actions { flex-direction: column; }
   .modal-actions > * { width: 100%; }
@@ -1703,8 +1766,8 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
     max-width: none;
     min-width: 120px;
   }
-  .canvas-toolbar {
-    flex-wrap: wrap;
+  .canvas-header {
+    padding: 8px 10px;
   }
 }
 

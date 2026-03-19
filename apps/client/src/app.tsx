@@ -192,25 +192,6 @@ const trimToNull = (value: string) => {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 };
-const explicitCanvasIntent = (prompt: string) => /\b(?:use|open|create|start|write)\s+(?:a\s+)?(?:new\s+)?canvas\b/i.test(prompt);
-const explicitCanvasCreateIntent = (prompt: string) => /\b(?:create|start|write|use)\s+(?:a\s+)?(?:new\s+)?canvas\s+(?:to|for|about|with|titled|called)\b/i.test(prompt);
-const stripCanvasPreamble = (prompt: string) =>
-  prompt
-    .replace(/\b(?:please\s+)?(?:use|open|create|start)\s+(?:a\s+)?canvas\b[:,-]?\s*/i, '')
-    .trim();
-const suggestCanvasTitle = (prompt: string, existingCount: number) => {
-  const candidate = stripCanvasPreamble(prompt).replace(/\s+/g, ' ').trim();
-  if (!candidate) {
-    return `Canvas ${existingCount + 1}`;
-  }
-  return candidate.length > 48 ? `${candidate.slice(0, 48).trimEnd()}…` : candidate;
-};
-const replaceCanvasSelection = (content: string, selection: CanvasSelection | null, replacement: string) => {
-  if (!selection) {
-    return replacement;
-  }
-  return `${content.slice(0, selection.start)}${replacement}${content.slice(selection.end)}`;
-};
 const countUserMessages = (messages: ChatMessage[]) => messages.filter((message) => message.role === 'user').length;
 
 function SettingsIcon() {
@@ -1255,35 +1236,19 @@ export default function App() {
     const reasoningEffort = selectedChat.reasoningEffort;
     const messageAttachments = selectedChat.draftAttachments;
     const userMessageIndex = countUserMessages(selectedChat.messages);
-    const wantsCanvasOutput = explicitCanvasIntent(prompt) || (composerTarget === 'canvas' && (activeCanvas !== null || canvasPaneOpen));
-    const wantsNewCanvas = explicitCanvasCreateIntent(prompt);
-    const canvasMode =
-      wantsCanvasOutput
-        ? (wantsNewCanvas ? 'create' : activeCanvas ? 'update' : 'create')
-        : canvasPaneOpen && activeCanvas ? 'chat' : null;
-    const canvasSelectionForSend = wantsCanvasOutput && activeCanvas ? canvasSelection : canvasPaneOpen ? canvasSelection : null;
-    const baseCanvas = activeCanvas;
-    const tempCanvasId = canvasMode === 'create' ? `temp-canvas-${createId()}` : null;
-    const tempCanvas: CanvasArtifact | null =
-      tempCanvasId
-        ? {
-            id: tempCanvasId,
-            threadId: chatId,
-            title: suggestCanvasTitle(prompt, selectedCanvases.length),
-            kind: 'document',
-            content: '',
-            createdByUserMessageIndex: userMessageIndex,
-            lastUpdatedByUserMessageIndex: userMessageIndex,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            revisionCount: 0,
-            latestRevisionNumber: 0,
-          }
-        : null;
-    const canvasTarget = baseCanvas ?? tempCanvas;
-    const baseCanvasContent = baseCanvas?.content ?? '';
-    let streamedCanvasOutput = '';
-    let canvasManagedByTool = false;
+
+    // Canvas context: only send if a canvas is currently open (purely as context for the LLM)
+    const canvasContextForSend = canvasPaneOpen && activeCanvas
+      ? {
+          mode: (composerTarget === 'canvas' ? 'update' : 'chat') as 'chat' | 'create' | 'update',
+          canvasId: activeCanvas.id,
+          title: activeCanvas.title,
+          kind: activeCanvas.kind,
+          currentContent: activeCanvas.content,
+          selection: canvasSelection ?? undefined,
+        }
+      : undefined;
+
     let didAbort = false;
     let didFail = false;
     let nextReplayMessageIndex = selectedChat.messages.length;
@@ -1293,35 +1258,6 @@ export default function App() {
     let pendingReasoningDelta = '';
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
     let splitAssistantMessageOnNextText = false;
-
-    const previewCanvasOutput = (nextOutput: string) => {
-      if (!canvasTarget || !wantsCanvasOutput) {
-        return;
-      }
-      const content = canvasMode === 'create'
-        ? nextOutput
-        : replaceCanvasSelection(baseCanvasContent, canvasSelectionForSend, nextOutput);
-      upsertCanvasForThread(chatId, {
-        ...canvasTarget,
-        content,
-        updatedAt: new Date().toISOString(),
-        lastUpdatedByUserMessageIndex: userMessageIndex,
-      });
-    };
-
-    const restoreCanvasAfterFailure = () => {
-      if (!canvasTarget || !wantsCanvasOutput || canvasManagedByTool) {
-        return;
-      }
-      if (tempCanvasId) {
-        removeCanvasForThread(chatId, tempCanvasId);
-        return;
-      }
-      upsertCanvasForThread(chatId, {
-        ...canvasTarget,
-        content: baseCanvasContent,
-      });
-    };
 
     const ensureStreamingAssistantMessage = () => {
       if (!splitAssistantMessageOnNextText) {
@@ -1349,10 +1285,6 @@ export default function App() {
       const nextReasoningDelta = pendingReasoningDelta;
       pendingDelta = '';
       pendingReasoningDelta = '';
-      if (nextDelta && wantsCanvasOutput && !canvasManagedByTool) {
-        streamedCanvasOutput += nextDelta;
-        previewCanvasOutput(streamedCanvasOutput);
-      }
       updateChat(chatId, (chat) => ({
         ...chat,
         updatedAt: new Date().toISOString(),
@@ -1389,14 +1321,6 @@ export default function App() {
     setDraft('');
     setError(null);
     setStreamingChatIds((prev) => new Set(prev).add(chatId));
-    if (tempCanvas) {
-      upsertCanvasForThread(chatId, tempCanvas);
-      setActiveCanvasIdByThread((current) => ({ ...current, [chatId]: tempCanvas.id }));
-      setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: true }));
-      setComposerTarget('canvas');
-    } else if (canvasTarget && (wantsCanvasOutput || canvasPaneOpen)) {
-      setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: true }));
-    }
 
     updateChat(chatId, (chat) => ({
       ...chat,
@@ -1423,16 +1347,7 @@ export default function App() {
           model,
           reasoningEffort,
           attachments: messageAttachments.map((attachment) => attachment.id),
-          canvas: canvasMode && canvasTarget
-            ? {
-                mode: canvasMode,
-                canvasId: tempCanvasId ? undefined : canvasTarget.id,
-                title: canvasTarget.title,
-                kind: canvasTarget.kind,
-                currentContent: baseCanvasContent,
-                selection: canvasSelectionForSend ?? undefined,
-              }
-            : undefined,
+          canvas: canvasContextForSend,
         },
         session.sessionToken,
         (event) => {
@@ -1537,9 +1452,6 @@ export default function App() {
             return;
           }
           if (event.type === 'tool_event') {
-            if (event.activity.toolName.startsWith('canvas.')) {
-              canvasManagedByTool = true;
-            }
             if (flushTimer !== null) {
               clearTimeout(flushTimer);
               flushTimer = null;
@@ -1565,10 +1477,6 @@ export default function App() {
             return;
           }
           if (event.type === 'canvas_sync') {
-            canvasManagedByTool = true;
-            if (tempCanvasId) {
-              removeCanvasForThread(chatId, tempCanvasId);
-            }
             replaceThreadCanvases(chatId, event.canvases);
             if (event.activeCanvasId !== undefined) {
               setActiveCanvasIdByThread((current) => ({ ...current, [chatId]: event.activeCanvasId ?? null }));
@@ -1619,7 +1527,6 @@ export default function App() {
               flushTimer = null;
             }
             flushPendingDelta();
-            restoreCanvasAfterFailure();
             updateChat(chatId, (chat) => ({
               ...chat,
               updatedAt: new Date().toISOString(),
@@ -1641,7 +1548,6 @@ export default function App() {
               flushTimer = null;
             }
             flushPendingDelta();
-            restoreCanvasAfterFailure();
             updateChat(chatId, (chat) => {
               const assistantMessage = chat.messages.find((message) => message.id === assistantMessageId);
               const hasContent = Boolean(assistantMessage?.content.trim());
@@ -1671,41 +1577,6 @@ export default function App() {
         flushTimer = null;
       }
       flushPendingDelta();
-
-      if (canvasTarget && wantsCanvasOutput && !canvasManagedByTool && !didFail && !didAbort) {
-        const finalContent = canvasMode === 'create'
-          ? streamedCanvasOutput
-          : replaceCanvasSelection(baseCanvasContent, canvasSelectionForSend, streamedCanvasOutput);
-        if (tempCanvasId) {
-          const payload = await createCanvas(
-            chatId,
-            {
-              title: canvasTarget.title,
-              kind: canvasTarget.kind,
-              content: finalContent,
-              sourceUserMessageIndex: userMessageIndex,
-            },
-            session.sessionToken,
-          );
-          removeCanvasForThread(chatId, tempCanvasId);
-          upsertCanvasForThread(chatId, payload.canvas);
-          setActiveCanvasIdByThread((current) => ({ ...current, [chatId]: payload.canvas.id }));
-        } else {
-          const payload = await updateCanvas(
-            chatId,
-            canvasTarget.id,
-            {
-              content: finalContent,
-              sourceUserMessageIndex: userMessageIndex,
-            },
-            session.sessionToken,
-          );
-          upsertCanvasForThread(chatId, payload.canvas);
-          setActiveCanvasIdByThread((current) => ({ ...current, [chatId]: payload.canvas.id }));
-        }
-        setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: true }));
-        setComposerTarget('canvas');
-      }
     } catch (sendError) {
       didFail = true;
       if (flushTimer !== null) {
@@ -1713,7 +1584,6 @@ export default function App() {
         flushTimer = null;
       }
       flushPendingDelta();
-      restoreCanvasAfterFailure();
       const message = sendError instanceof Error ? sendError.message : 'Unable to send message.';
       updateChat(chatId, (chat) => ({
         ...chat,

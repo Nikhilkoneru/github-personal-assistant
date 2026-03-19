@@ -2042,64 +2042,51 @@ export default function App() {
           </header>
 
           <div className={`main-body${canvasPaneOpen ? ' main-body--with-canvas' : ''}`}>
-            <div className="message-scroll" ref={messagesRef}>
-              {!isOnline ? <div className="top-banner offline">You are offline. The app shell is cached, but your daemon must be reachable to sign in and chat.</div> : null}
-              {loading ? (
-                <div className="empty-state"><div><h2>Loading…</h2><p>Restoring your threads and daemon health.</p></div></div>
-              ) : selectedChat?.messages.length ? (
-                <div className="message-list">
-                  {(() => {
-                    let userMessageIndex = -1;
-                    return selectedChat.messages.map((message, index) => {
-                      if (message.role === 'user') {
-                        userMessageIndex += 1;
-                      }
-                      return (
-                        <MessageBubble
-                          key={message.id}
-                          message={message}
-                          canvasReferences={message.role === 'user' ? canvasReferencesByUserMessageIndex.get(userMessageIndex) : undefined}
-                          onOpenCanvas={handleOpenCanvas}
-                          isStreaming={
-                            streamingChatIds.has(selectedChat.id) &&
-                            message.role === 'assistant' &&
-                            index === selectedChat.messages.length - 1
-                          }
-                        />
-                      );
-                    });
-                  })()}
-                </div>
-              ) : (
-                <div className="empty-state">
-                  <div className="empty-state-content">
-                    <img className="empty-state-logo" src="./icons/continuum-mark.svg" alt="" aria-hidden="true" />
-                    <h2>Start in Continuum</h2>
-                    <p>Messages stay on your daemon, so you can reconnect from any browser on your network or tailnet.</p>
+            {/* Chat column — messages + composer together so they resize as one unit */}
+            <div className="chat-column">
+              <div className="message-scroll" ref={messagesRef}>
+                {!isOnline ? <div className="top-banner offline">You are offline. The app shell is cached, but your daemon must be reachable to sign in and chat.</div> : null}
+                {loading ? (
+                  <div className="empty-state"><div><h2>Loading…</h2><p>Restoring your threads and daemon health.</p></div></div>
+                ) : selectedChat?.messages.length ? (
+                  <div className="message-list">
+                    {(() => {
+                      let userMessageIndex = -1;
+                      return selectedChat.messages.map((message, index) => {
+                        if (message.role === 'user') {
+                          userMessageIndex += 1;
+                        }
+                        return (
+                          <MessageBubble
+                            key={message.id}
+                            message={message}
+                            canvasReferences={message.role === 'user' ? canvasReferencesByUserMessageIndex.get(userMessageIndex) : undefined}
+                            onOpenCanvas={handleOpenCanvas}
+                            isStreaming={
+                              streamingChatIds.has(selectedChat.id) &&
+                              message.role === 'assistant' &&
+                              index === selectedChat.messages.length - 1
+                            }
+                          />
+                        );
+                      });
+                    })()}
                   </div>
-                </div>
-              )}
-            </div>
+                ) : (
+                  <div className="empty-state">
+                    <div className="empty-state-content">
+                      <img className="empty-state-logo" src="./icons/continuum-mark.svg" alt="" aria-hidden="true" />
+                      <h2>Start in Continuum</h2>
+                      <p>Messages stay on your daemon, so you can reconnect from any browser on your network or tailnet.</p>
+                    </div>
+                  </div>
+                )}
+              </div>
 
-            {canvasPaneOpen ? (
-              <CanvasPane
-                canvas={activeCanvas ?? null}
-                selection={canvasSelection}
-                saving={Boolean(activeCanvas && savingCanvasId === activeCanvas.id)}
-                onClose={handleCloseCanvas}
-                onTitleChange={handleCanvasTitleChange}
-                onContentChange={handleCanvasContentChange}
-                onContentBlur={(canvasId, title, content) => void handlePersistCanvas(canvasId, title, content)}
-                onSelectionChange={handleCanvasSelectionChange}
-                onCopy={(canvas) => void handleCopyCanvas(canvas)}
-              />
-            ) : null}
-          </div>
+              <div className="composer">
+                {error ? <div className="error-banner">{error}</div> : null}
 
-          <footer className="composer">
-            {error ? <div className="error-banner">{error}</div> : null}
-
-            <input ref={fileInputRef} className="hidden-input" type="file" multiple onChange={handleFilesSelected} />
+                <input ref={fileInputRef} className="hidden-input" type="file" multiple onChange={handleFilesSelected} />
 
             {selectedChat?.draftAttachments.length ? (
               <div className="composer-drafts">
@@ -2191,24 +2178,6 @@ export default function App() {
               </div>
             ) : null}
 
-            {canvasPaneOpen && activeCanvas && selectedChat ? (
-              <div className="composer-active-tool">
-                <CanvasIcon size={14} />
-                <span className="composer-active-tool-label">{activeCanvas.title}</span>
-                <span className="composer-active-tool-meta">
-                  {composerTarget === 'canvas'
-                    ? canvasSelection ? 'Editing selection' : 'Editing'
-                    : 'Open'}
-                </span>
-                <button
-                  type="button"
-                  className="composer-active-tool-close"
-                  onClick={handleCloseCanvas}
-                  aria-label="Close canvas"
-                >×</button>
-              </div>
-            ) : null}
-
             <div className="composer-bar">
               <button
                 type="button"
@@ -2274,7 +2243,23 @@ export default function App() {
                 {isSelectedChatStreaming ? <StopIcon /> : <SendIcon />}
               </button>
             </div>
-          </footer>
+              </div>
+            </div>{/* end chat-column */}
+
+            {canvasPaneOpen ? (
+              <CanvasPane
+                canvas={activeCanvas ?? null}
+                selection={canvasSelection}
+                saving={Boolean(activeCanvas && savingCanvasId === activeCanvas.id)}
+                onClose={handleCloseCanvas}
+                onTitleChange={handleCanvasTitleChange}
+                onContentChange={handleCanvasContentChange}
+                onContentBlur={(canvasId, title, content) => void handlePersistCanvas(canvasId, title, content)}
+                onSelectionChange={handleCanvasSelectionChange}
+                onCopy={(canvas) => void handleCopyCanvas(canvas)}
+              />
+            ) : null}
+          </div>{/* end main-body */}
         </main>
       </div>
       {settingsModal}

@@ -1,4 +1,6 @@
+import { useState, useRef, useCallback } from 'react';
 import type { CanvasArtifact, CanvasSelection } from '../lib/types.js';
+import { MarkdownContent } from './markdown-content.js';
 
 type CanvasPaneProps = {
   canvas: CanvasArtifact | null;
@@ -23,77 +25,108 @@ export function CanvasPane({
   onSelectionChange,
   onCopy,
 }: CanvasPaneProps) {
+  const [editing, setEditing] = useState(false);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+
+  const enterEditMode = useCallback(() => {
+    setEditing(true);
+    // Focus the textarea after React renders it
+    requestAnimationFrame(() => editorRef.current?.focus());
+  }, []);
+
+  const exitEditMode = useCallback(() => {
+    if (canvas) {
+      onContentBlur(canvas.id, canvas.title, canvas.content);
+    }
+    setEditing(false);
+  }, [canvas, onContentBlur]);
+
   return (
     <aside className="canvas-pane">
-      <div className="canvas-editor-shell">
-        <div className="canvas-editor-header">
-          <div className="canvas-editor-header-copy">
-            {canvas ? (
-              <>
-                <div className="status-label">{canvas.title}</div>
-                <div className="helper-text">{canvas.kind} · revision {canvas.latestRevisionNumber}</div>
-              </>
-            ) : (
-              <div className="status-label">Canvas</div>
-            )}
-          </div>
-          <div className="canvas-editor-actions">
-            {canvas ? (
-              <button type="button" className="ghost-button" onClick={() => onCopy(canvas)}>
-                Copy
+      {/* Minimal toolbar: just icons, no big header */}
+      <div className="canvas-toolbar">
+        <div className="canvas-toolbar-left">
+          {canvas ? (
+            <>
+              <button
+                type="button"
+                className={`canvas-toolbar-btn${editing ? ' canvas-toolbar-btn--active' : ''}`}
+                onClick={() => editing ? exitEditMode() : enterEditMode()}
+                aria-label={editing ? 'Preview' : 'Edit'}
+                title={editing ? 'Preview' : 'Edit'}
+              >
+                {editing ? (
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 8a8 8 0 1116 0A8 8 0 010 8zm1.5 0a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0zM6.5 12V7.5h3v1H8v3.5H6.5z"/></svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.013 1.427a1.75 1.75 0 012.474 0l1.086 1.086a1.75 1.75 0 010 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 01-.927-.928l.929-3.25a1.75 1.75 0 01.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 00-.354 0L3.463 11.098a.25.25 0 00-.064.108l-.563 1.97 1.971-.564a.25.25 0 00.108-.064l8.61-8.61a.25.25 0 000-.354L12.427 2.487z"/></svg>
+                )}
               </button>
-            ) : null}
-            <button type="button" className="ghost-button" onClick={onClose}>Close</button>
-          </div>
+              <button
+                type="button"
+                className="canvas-toolbar-btn"
+                onClick={() => onCopy(canvas)}
+                aria-label="Copy"
+                title="Copy content"
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z"/></svg>
+              </button>
+            </>
+          ) : null}
+          {saving ? <span className="canvas-saving">Saving…</span> : null}
         </div>
-
-        {canvas ? (
-          <>
-            <input
-              className="input canvas-title-input"
-              value={canvas.title}
-              onChange={(event) => onTitleChange(canvas.id, event.target.value)}
-              onBlur={(event) => onContentBlur(canvas.id, event.target.value, canvas.content)}
-              aria-label="Canvas title"
-              placeholder="Canvas title"
-            />
-            <textarea
-              className="canvas-editor"
-              value={canvas.content}
-              onChange={(event) => onContentChange(canvas.id, event.target.value)}
-              onBlur={(event) => onContentBlur(canvas.id, canvas.title, event.target.value)}
-              onSelect={(event) => {
-                const target = event.currentTarget;
-                const start = target.selectionStart ?? 0;
-                const end = target.selectionEnd ?? 0;
-                if (end <= start) {
-                  onSelectionChange(canvas.id, null);
-                  return;
-                }
-                onSelectionChange(canvas.id, {
-                  start,
-                  end,
-                  text: target.value.slice(start, end),
-                });
-              }}
-              spellCheck={canvas.kind !== 'code'}
-              aria-label={`Canvas editor for ${canvas.title}`}
-            />
-            <div className="canvas-footer">
-              <div className="helper-text">
-                {selection
-                  ? `Selected ${selection.end - selection.start} characters for the next canvas-targeted follow-up.`
-                  : 'Select text in the canvas to target only that section.'}
-              </div>
-              {saving ? <div className="helper-text">Saving canvas…</div> : null}
-            </div>
-          </>
-        ) : (
-          <div className="canvas-empty canvas-empty--editor">
-            Ask the AI to use canvas, or it will open one automatically when drafting.
-          </div>
-        )}
+        <button
+          type="button"
+          className="canvas-toolbar-btn"
+          onClick={onClose}
+          aria-label="Close canvas"
+          title="Close"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z"/></svg>
+        </button>
       </div>
+
+      {canvas ? (
+        <div className="canvas-document">
+          {editing ? (
+            /* Edit mode: textarea for raw editing + selection */
+            <>
+              <textarea
+                ref={editorRef}
+                className="canvas-editor"
+                value={canvas.content}
+                onChange={(event) => onContentChange(canvas.id, event.target.value)}
+                onBlur={() => exitEditMode()}
+                onSelect={(event) => {
+                  const target = event.currentTarget;
+                  const start = target.selectionStart ?? 0;
+                  const end = target.selectionEnd ?? 0;
+                  if (end <= start) {
+                    onSelectionChange(canvas.id, null);
+                    return;
+                  }
+                  onSelectionChange(canvas.id, { start, end, text: target.value.slice(start, end) });
+                }}
+                spellCheck={canvas.kind !== 'code'}
+                aria-label={`Editing ${canvas.title}`}
+              />
+              {selection ? (
+                <div className="canvas-selection-hint">
+                  {selection.end - selection.start} chars selected — type in chat to edit this section
+                </div>
+              ) : null}
+            </>
+          ) : (
+            /* View mode: rendered markdown document */
+            <div className="canvas-rendered" onClick={enterEditMode} role="button" tabIndex={0} aria-label="Click to edit">
+              <MarkdownContent content={canvas.content} className="canvas-markdown" />
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="canvas-empty canvas-empty--editor">
+          Ask the AI to use canvas, or it will open one automatically when drafting.
+        </div>
+      )}
     </aside>
   );
 }

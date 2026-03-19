@@ -80,7 +80,7 @@ export function MessageBubble({ message, isStreaming, canvasReferences, onOpenCa
             <div>
               <span className="thinking-label">{isThinking ? 'Thinking…' : 'Working…'}</span>
               {isThinking && message.metadata?.reasoning ? (
-                <div className="thinking-preview">{message.metadata.reasoning}</div>
+                <MarkdownContent content={message.metadata.reasoning} className="thinking-preview" />
               ) : null}
             </div>
           </div>
@@ -94,7 +94,7 @@ export function MessageBubble({ message, isStreaming, canvasReferences, onOpenCa
               </svg>
               Reasoning
             </summary>
-            <div className="reasoning-text">{message.metadata!.reasoning}</div>
+            <MarkdownContent content={message.metadata!.reasoning as string} className="reasoning-text" />
           </details>
         ) : null}
 
@@ -115,84 +115,89 @@ export function MessageBubble({ message, isStreaming, canvasReferences, onOpenCa
           isUser ? <div className="msg-content">{stripCanvasWrapper(message.content)}</div> : <MarkdownContent content={message.content} className="msg-content markdown-content" />
         ) : null}
 
-        {toolActivities.length ? (
-          <div className="tool-activity-list">
-            {toolActivities.map((activity) => {
-              const isRunning = activity.status === 'running';
-              const header = (
-                <div className="tool-activity-header">
-                  <div className="tool-activity-title-row">
-                    <span className={`tool-activity-indicator tool-activity-indicator--${activity.status}`} aria-hidden="true" />
-                    <span className="tool-activity-name">{activity.toolName}</span>
-                    <span className={`tool-activity-badge tool-activity-badge--${activity.status}`}>{toolStatusLabels[activity.status]}</span>
+        {toolActivities.length ? (() => {
+          const running = toolActivities.filter((a) => a.status === 'running');
+          const completed = toolActivities.filter((a) => a.status === 'completed');
+          const failed = toolActivities.filter((a) => a.status === 'failed');
+
+          return (
+            <div className="tool-activity-list">
+              {/* Running tools: show expanded */}
+              {running.map((activity) => (
+                <section key={activity.id} className="tool-activity tool-activity--running">
+                  <div className="tool-activity-header">
+                    <div className="tool-activity-title-row">
+                      <span className="tool-activity-indicator tool-activity-indicator--running" aria-hidden="true" />
+                      <span className="tool-activity-name">{activity.toolName}</span>
+                      <span className="tool-activity-badge tool-activity-badge--running">Running</span>
+                    </div>
+                    <time className="tool-activity-time">{formatTime(activity.updatedAt)}</time>
                   </div>
-                  <time className="tool-activity-time">{formatTime(activity.updatedAt)}</time>
-                </div>
-              );
-
-              const body = (
-                <>
                   <div className="tool-activity-summary">{summarizeToolActivity(activity)}</div>
+                </section>
+              ))}
 
-                  {activity.permissionDecision || activity.permissionDecisionReason || activity.suppressed ? (
-                    <div className="tool-activity-note">
-                      {activity.permissionDecision ? `Permission: ${activity.permissionDecision}` : 'Permission update'}
-                      {activity.permissionDecisionReason ? ` - ${activity.permissionDecisionReason}` : ''}
-                      {activity.suppressed ? ' - hidden from assistant output' : ''}
-                    </div>
-                  ) : null}
-
-                  {activity.arguments ? (
-                    <div className="tool-activity-section">
-                      <div className="tool-activity-label">Arguments</div>
-                      <pre className="tool-activity-payload">{formatToolPayload(activity.arguments)}</pre>
-                    </div>
-                  ) : null}
-
-                  {activity.additionalContext ? (
-                    <div className="tool-activity-section">
-                      <div className="tool-activity-label">Progress</div>
-                      <div className="tool-activity-text">{activity.additionalContext}</div>
-                    </div>
-                  ) : null}
-
-                  {activity.result ? (
-                    <div className="tool-activity-section">
-                      <div className="tool-activity-label">Result</div>
-                      <pre className="tool-activity-payload">{formatToolPayload(activity.result)}</pre>
-                    </div>
-                  ) : null}
-
-                  {activity.error ? (
-                    <div className="tool-activity-section">
-                      <div className="tool-activity-label">Error</div>
-                      <div className="tool-activity-text tool-activity-text--error">{activity.error}</div>
-                    </div>
-                  ) : null}
-                </>
-              );
-
-              // Running tools stay expanded; completed/failed collapse into a <details>
-              if (isRunning) {
-                return (
-                  <section key={activity.id} className={`tool-activity tool-activity--running`}>
-                    {header}
-                    {body}
-                  </section>
-                );
-              }
-
-              return (
-                <details key={activity.id} className={`tool-activity tool-activity--${activity.status}`}>
-                  <summary className="tool-activity-collapse-summary">
-                    {header}
+              {/* Completed tools: compact stacked group */}
+              {completed.length ? (
+                <details className="tool-activity-group tool-activity-group--completed">
+                  <summary className="tool-activity-group-summary">
+                    <span className="tool-activity-indicator tool-activity-indicator--completed" aria-hidden="true" />
+                    <span className="tool-activity-group-label">
+                      {completed.length} tool{completed.length > 1 ? 's' : ''} completed
+                    </span>
+                    <span className="tool-activity-group-names">
+                      {completed.map((a) => a.toolName).join(', ')}
+                    </span>
+                    <span className="tool-activity-group-chevron" aria-hidden="true">▸</span>
                   </summary>
-                  {body}
+                  <div className="tool-activity-group-body">
+                    {completed.map((activity) => (
+                      <details key={activity.id} className="tool-activity tool-activity--completed">
+                        <summary className="tool-activity-collapse-summary">
+                          <div className="tool-activity-header">
+                            <div className="tool-activity-title-row">
+                              <span className="tool-activity-indicator tool-activity-indicator--completed" aria-hidden="true" />
+                              <span className="tool-activity-name">{activity.toolName}</span>
+                            </div>
+                            <time className="tool-activity-time">{formatTime(activity.updatedAt)}</time>
+                          </div>
+                        </summary>
+                        <div className="tool-activity-summary">{summarizeToolActivity(activity)}</div>
+                        {activity.arguments ? (
+                          <div className="tool-activity-section">
+                            <div className="tool-activity-label">Arguments</div>
+                            <pre className="tool-activity-payload">{formatToolPayload(activity.arguments)}</pre>
+                          </div>
+                        ) : null}
+                        {activity.result ? (
+                          <div className="tool-activity-section">
+                            <div className="tool-activity-label">Result</div>
+                            <pre className="tool-activity-payload">{formatToolPayload(activity.result)}</pre>
+                          </div>
+                        ) : null}
+                      </details>
+                    ))}
+                  </div>
                 </details>
-              );
-            })}
-          </div>
-        ) : null}
+              ) : null}
+
+              {/* Failed tools: show individually */}
+              {failed.map((activity) => (
+                <section key={activity.id} className="tool-activity tool-activity--failed">
+                  <div className="tool-activity-header">
+                    <div className="tool-activity-title-row">
+                      <span className="tool-activity-indicator tool-activity-indicator--failed" aria-hidden="true" />
+                      <span className="tool-activity-name">{activity.toolName}</span>
+                      <span className="tool-activity-badge tool-activity-badge--failed">Failed</span>
+                    </div>
+                    <time className="tool-activity-time">{formatTime(activity.updatedAt)}</time>
+                  </div>
+                  <div className="tool-activity-text tool-activity-text--error">{activity.error}</div>
+                </section>
+              ))}
+            </div>
+          );
+        })() : null}
 
         {message.attachments?.length ? (
           <div className="msg-attachments">
@@ -219,7 +224,7 @@ export function MessageBubble({ message, isStreaming, canvasReferences, onOpenCa
 
         <div className="msg-footer">
           <time className="msg-time">{formatTime(message.createdAt)}</time>
-          {usageParts.length ? <span className="msg-usage">{usageParts.join(' · ')}</span> : null}
+          {usageParts.length ? <span className="msg-usage" title={usageParts.join(' · ')}>{usageParts.join(' · ')}</span> : null}
         </div>
       </div>
     </div>

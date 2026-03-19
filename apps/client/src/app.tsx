@@ -192,7 +192,8 @@ const trimToNull = (value: string) => {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 };
-const explicitCanvasIntent = (prompt: string) => /\b(?:use|open|create|start)\s+(?:a\s+)?canvas\b/i.test(prompt);
+const explicitCanvasIntent = (prompt: string) => /\b(?:use|open|create|start|write)\s+(?:a\s+)?(?:new\s+)?canvas\b/i.test(prompt);
+const explicitCanvasCreateIntent = (prompt: string) => /\b(?:create|start|write|use)\s+(?:a\s+)?(?:new\s+)?canvas\s+(?:to|for|about|with|titled|called)\b/i.test(prompt);
 const stripCanvasPreamble = (prompt: string) =>
   prompt
     .replace(/\b(?:please\s+)?(?:use|open|create|start)\s+(?:a\s+)?canvas\b[:,-]?\s*/i, '')
@@ -1255,8 +1256,11 @@ export default function App() {
     const messageAttachments = selectedChat.draftAttachments;
     const userMessageIndex = countUserMessages(selectedChat.messages);
     const wantsCanvasOutput = explicitCanvasIntent(prompt) || (composerTarget === 'canvas' && (activeCanvas !== null || canvasPaneOpen));
+    const wantsNewCanvas = explicitCanvasCreateIntent(prompt);
     const canvasMode =
-      wantsCanvasOutput ? (activeCanvas ? 'update' : 'create') : canvasPaneOpen && activeCanvas ? 'chat' : null;
+      wantsCanvasOutput
+        ? (wantsNewCanvas ? 'create' : activeCanvas ? 'update' : 'create')
+        : canvasPaneOpen && activeCanvas ? 'chat' : null;
     const canvasSelectionForSend = wantsCanvasOutput && activeCanvas ? canvasSelection : canvasPaneOpen ? canvasSelection : null;
     const baseCanvas = activeCanvas;
     const tempCanvasId = canvasMode === 'create' ? `temp-canvas-${createId()}` : null;
@@ -2124,10 +2128,9 @@ export default function App() {
             </div>
             <div className="main-header-actions">
               <label className="header-model-field" htmlFor="header-model">
-                <span className="header-model-label">Model</span>
                 <select
                   id="header-model"
-                  className="select header-model-select"
+                  className="header-model-pill"
                   value={activeModelId}
                   onChange={(event) => {
                     if (!selectedChat) return;
@@ -2148,10 +2151,9 @@ export default function App() {
               </label>
               {selectedChat && selectedModel?.capabilities?.supports.reasoningEffort ? (
                 <label className="header-model-field" htmlFor="header-reasoning">
-                  <span className="header-model-label">Thinking</span>
                   <select
                     id="header-reasoning"
-                    className="select header-model-select"
+                    className="header-model-pill header-model-pill--thinking"
                     value={activeReasoningEffort ?? ''}
                     onChange={(event) =>
                       void handleThreadConfigChange(selectedChat.id, {
@@ -2166,9 +2168,6 @@ export default function App() {
                   </select>
                 </label>
               ) : null}
-              <IconButton label="Start new chat" onClick={() => void handleCreateChat()}>
-                <PlusIcon />
-              </IconButton>
             </div>
           </header>
 

@@ -2039,6 +2039,56 @@ export default function App() {
                 {headerMeta ? <div className="main-subtitle" title={selectedChat?.workspacePath ?? undefined}>{headerMeta}</div> : null}
               </div>
             </div>
+            {selectedChat ? (
+              <div className="main-header-actions">
+                <div className="header-model-field">
+                  <select
+                    aria-label="Model"
+                    className="header-model-pill"
+                    value={activeModelId}
+                    onChange={(event) => {
+                      if (!selectedChat) {
+                        return;
+                      }
+                      const nextModelId = event.target.value;
+                      const nextModel = models.find((model) => model.id === nextModelId);
+                      const nextReasoningEffort =
+                        nextModel?.capabilities?.supports.reasoningEffort
+                          ? selectedChat.reasoningEffort && nextModel.supportedReasoningEfforts?.includes(selectedChat.reasoningEffort)
+                            ? selectedChat.reasoningEffort
+                            : nextModel.defaultReasoningEffort ?? nextModel.supportedReasoningEfforts?.[0] ?? null
+                          : null;
+                      void handleThreadConfigChange(selectedChat.id, { model: nextModelId, reasoningEffort: nextReasoningEffort });
+                    }}
+                    disabled={!models.length || savingThreadConfigId === selectedChat.id}
+                  >
+                    {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+                  </select>
+                </div>
+                {selectedModel?.capabilities?.supports.reasoningEffort ? (
+                  <div className="header-model-field">
+                    <select
+                      aria-label="Thinking"
+                      className="header-model-pill header-model-pill--thinking"
+                      value={activeReasoningEffort ?? ''}
+                      onChange={(event) => {
+                        if (!selectedChat) {
+                          return;
+                        }
+                        void handleThreadConfigChange(selectedChat.id, {
+                          reasoningEffort: (event.target.value || null) as ReasoningEffort | null,
+                        });
+                      }}
+                      disabled={!selectedReasoningEfforts.length || savingThreadConfigId === selectedChat.id}
+                    >
+                      {selectedReasoningEfforts.map((effort) => (
+                        <option key={effort} value={effort}>{effort}</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </header>
 
           <div className={`main-body${canvasPaneOpen ? ' main-body--with-canvas' : ''}`}>
@@ -2174,59 +2224,6 @@ export default function App() {
                       {respondingToUserInputId === selectedChat.pendingUserInputRequest.requestId ? 'Sending…' : 'Send'}
                     </button>
                   </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            {selectedChat ? (
-              <div className="composer-config-row">
-                <label className="composer-config-field" htmlFor="composer-model">
-                  <span className="composer-config-label">Model</span>
-                  <select
-                    id="composer-model"
-                    className="composer-config-pill"
-                    value={activeModelId}
-                    onChange={(event) => {
-                      if (!selectedChat) {
-                        return;
-                      }
-                      const nextModelId = event.target.value;
-                      const nextModel = models.find((model) => model.id === nextModelId);
-                      const nextReasoningEffort =
-                        nextModel?.capabilities?.supports.reasoningEffort
-                          ? selectedChat.reasoningEffort && nextModel.supportedReasoningEfforts?.includes(selectedChat.reasoningEffort)
-                            ? selectedChat.reasoningEffort
-                            : nextModel.defaultReasoningEffort ?? nextModel.supportedReasoningEfforts?.[0] ?? null
-                          : null;
-                      void handleThreadConfigChange(selectedChat.id, { model: nextModelId, reasoningEffort: nextReasoningEffort });
-                    }}
-                    disabled={!models.length || savingThreadConfigId === selectedChat.id}
-                  >
-                    {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-                  </select>
-                </label>
-                {selectedModel?.capabilities?.supports.reasoningEffort ? (
-                  <label className="composer-config-field" htmlFor="composer-reasoning">
-                    <span className="composer-config-label">Thinking</span>
-                    <select
-                      id="composer-reasoning"
-                    className="composer-config-pill composer-config-pill--thinking"
-                    value={activeReasoningEffort ?? ''}
-                      onChange={(event) => {
-                        if (!selectedChat) {
-                          return;
-                        }
-                        void handleThreadConfigChange(selectedChat.id, {
-                          reasoningEffort: (event.target.value || null) as ReasoningEffort | null,
-                        });
-                      }}
-                      disabled={!selectedReasoningEfforts.length || savingThreadConfigId === selectedChat.id}
-                    >
-                      {selectedReasoningEfforts.map((effort) => (
-                        <option key={effort} value={effort}>{effort}</option>
-                      ))}
-                    </select>
-                  </label>
                 ) : null}
               </div>
             ) : null}

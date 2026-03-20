@@ -42,6 +42,8 @@ struct ChatToolActivityResponse {
 struct ChatMessageMetadataResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_activities: Option<Vec<ChatToolActivityResponse>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_message_index: Option<usize>,
 }
 
 #[derive(Clone, Serialize)]
@@ -369,12 +371,21 @@ fn replayed_messages_to_chat_messages(
                 .as_ref()
                 .map(|tool_calls| tool_calls_to_activities(tool_calls, &created_at))
                 .filter(|tool_calls| !tool_calls.is_empty());
-            let attachments = if replayed_message.role == "user" {
+            let (attachments, message_user_index) = if replayed_message.role == "user" {
+                let current_user_message_index = user_message_index;
                 let attachments = attachment_sets_by_user_index
-                    .get(&user_message_index)
+                    .get(&current_user_message_index)
                     .cloned();
                 user_message_index += 1;
-                attachments
+                (attachments, Some(current_user_message_index))
+            } else {
+                (None, None)
+            };
+            let metadata = if tool_activities.is_some() || message_user_index.is_some() {
+                Some(ChatMessageMetadataResponse {
+                    tool_activities,
+                    user_message_index: message_user_index,
+                })
             } else {
                 None
             };
@@ -385,9 +396,7 @@ fn replayed_messages_to_chat_messages(
                 content: replayed_message.content.clone(),
                 created_at,
                 attachments,
-                metadata: tool_activities.map(|tool_activities| ChatMessageMetadataResponse {
-                    tool_activities: Some(tool_activities),
-                }),
+                metadata,
             }
         })
         .collect()
@@ -427,6 +436,13 @@ fn message_digest(messages: &[ChatMessageResponse]) -> String {
         hasher.push(&message.role);
         hasher.push(&message.content);
         hasher.push_number(message.attachments.as_ref().map_or(0, Vec::len));
+        hasher.push_number(
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.user_message_index)
+                .unwrap_or(usize::MAX),
+        );
         if let Some(attachments) = message.attachments.as_ref() {
             for attachment in attachments {
                 hasher.push(&attachment.id);

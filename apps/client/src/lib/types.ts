@@ -278,6 +278,7 @@ export type ChatCanvasSyncEvent = {
 
 export type ChatMessageMetadata = {
   sessionMessageId?: string;
+  userMessageIndex?: number;
   reasoning?: string;
   reasoningState?: 'streaming' | 'complete';
   usage?: ChatUsage;

@@ -6,6 +6,7 @@ import type {
   CanvasArtifact,
   CanvasSelection,
   ChatMessage,
+  ChatMessageMetadata,
   ChatPermissionRequest,
   ChatToolActivity,
   CopilotPreferences,
@@ -110,6 +111,7 @@ const buildThreadMessageCursor = (messages: ChatMessage[]): ThreadMessageCursor 
     hash = updateDigest(hash, message.role);
     hash = updateDigest(hash, message.content);
     hash = updateDigest(hash, String(message.attachments?.length ?? 0));
+    hash = updateDigest(hash, String(message.metadata?.userMessageIndex ?? ''));
     for (const attachment of message.attachments ?? []) {
       hash = updateDigest(hash, attachment.id);
       hash = updateDigest(hash, attachment.name);
@@ -192,7 +194,29 @@ const trimToNull = (value: string) => {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 };
-const countUserMessages = (messages: ChatMessage[]) => messages.filter((message) => message.role === 'user').length;
+const createMessageWithMetadata = (
+  role: ChatMessage['role'],
+  content: string,
+  attachments?: AttachmentSummary[],
+  metadata?: ChatMessageMetadata,
+): ChatMessage => ({
+  ...createMessage(role, content, attachments),
+  ...(metadata ? { metadata } : {}),
+});
+const resolveUserMessageIndex = (message: ChatMessage, fallbackIndex: number) =>
+  typeof message.metadata?.userMessageIndex === 'number' ? message.metadata.userMessageIndex : fallbackIndex;
+const nextUserMessageIndex = (messages: ChatMessage[]) => {
+  let fallbackIndex = 0;
+  let highestIndex = -1;
+  for (const message of messages) {
+    if (message.role !== 'user') {
+      continue;
+    }
+    highestIndex = Math.max(highestIndex, resolveUserMessageIndex(message, fallbackIndex));
+    fallbackIndex += 1;
+  }
+  return highestIndex + 1;
+};
 
 function SettingsIcon() {
   return (
@@ -1277,7 +1301,7 @@ export default function App() {
     const model = selectedChat.model || defaultModel;
     const reasoningEffort = selectedChat.reasoningEffort;
     const messageAttachments = selectedChat.draftAttachments;
-    const userMessageIndex = countUserMessages(selectedChat.messages);
+    const userMessageIndex = nextUserMessageIndex(selectedChat.messages);
 
     // Canvas context: only send if a canvas is currently open (purely as context for the LLM)
     const canvasContextForSend = canvasPaneOpen && activeCanvas
@@ -1377,7 +1401,7 @@ export default function App() {
       pendingPermissionRequests: [],
       messages: sortMessages([
         ...chat.messages,
-        { ...createMessage('user', prompt, messageAttachments), id: userMessageId },
+        { ...createMessageWithMetadata('user', prompt, messageAttachments, { userMessageIndex }), id: userMessageId },
         { id: assistantMessageId, role: 'assistant', content: '', createdAt: new Date().toISOString(), metadata: {} },
       ]),
       hasLoadedMessages: true,
@@ -2101,16 +2125,22 @@ export default function App() {
                 ) : selectedChat?.messages.length ? (
                   <div className="message-list">
                     {(() => {
-                      let userMessageIndex = -1;
+                      let fallbackUserMessageIndex = 0;
                       return selectedChat.messages.map((message, index) => {
+                        const messageUserMessageIndex =
+                          message.role === 'user' ? resolveUserMessageIndex(message, fallbackUserMessageIndex) : null;
                         if (message.role === 'user') {
-                          userMessageIndex += 1;
+                          fallbackUserMessageIndex += 1;
                         }
                         return (
                           <MessageBubble
                             key={message.id}
                             message={message}
-                            canvasReferences={message.role === 'user' ? canvasReferencesByUserMessageIndex.get(userMessageIndex) : undefined}
+                            canvasReferences={
+                              message.role === 'user' && messageUserMessageIndex !== null
+                                ? canvasReferencesByUserMessageIndex.get(messageUserMessageIndex)
+                                : undefined
+                            }
                             onOpenCanvas={handleOpenCanvas}
                             isStreaming={
                               streamingChatIds.has(selectedChat.id) &&

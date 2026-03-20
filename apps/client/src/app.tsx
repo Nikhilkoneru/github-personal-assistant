@@ -44,6 +44,7 @@ import {
 } from './lib/api.js';
 import { clearApiUrlOverride, getApiUrlOverride, getDefaultApiUrl, setApiUrlOverride } from './lib/api-config.js';
 import {
+  type CanvasPresentationMode,
   getWorkspaceStoreState,
   getThreadCanvasState,
   getWorkspacePaneMode,
@@ -365,6 +366,7 @@ export default function App() {
   const setSelectionPromptDraft = useWorkspaceStore((state) => state.setSelectionPromptDraft);
   const clearCanvasSelection = useWorkspaceStore((state) => state.clearCanvasSelection);
   const setCanvasPendingRemoteApply = useWorkspaceStore((state) => state.setCanvasPendingRemoteApply);
+  const setCanvasPresentationMode = useWorkspaceStore((state) => state.setCanvasPresentationMode);
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
@@ -690,6 +692,7 @@ export default function App() {
   const canvasPaneOpen = selectedThreadCanvasState.isPaneOpen;
   const canvasSelection = activeCanvasSession.selection;
   const selectionPromptDraft = activeCanvasSession.selectionPromptDraft;
+  const activeCanvasPresentationMode = activeCanvasSession.presentationMode;
 
   useEffect(() => {
     if (canvasPaneOpen) {
@@ -1139,10 +1142,11 @@ export default function App() {
       );
       upsertCanvasForThread(selectedChat.id, payload.canvas);
       openCanvas(selectedChat.id, payload.canvas.id);
+      setCanvasPresentationMode(selectedChat.id, payload.canvas.id, 'edit');
     } catch (canvasError) {
       setError(canvasError instanceof Error ? canvasError.message : 'Unable to create canvas.');
     }
-  }, [openCanvas, selectedCanvases.length, selectedChat, session, upsertCanvasForThread]);
+  }, [openCanvas, selectedCanvases.length, selectedChat, session, setCanvasPresentationMode, upsertCanvasForThread]);
 
   const handleCanvasTitleChange = useCallback((canvasId: string, title: string) => {
     if (!selectedChat) {
@@ -1252,6 +1256,14 @@ export default function App() {
       setError(copyError instanceof Error ? copyError.message : 'Unable to copy canvas content.');
     }
   }, []);
+
+  const handleSetCanvasPresentationMode = useCallback((mode: CanvasPresentationMode) => {
+    if (!selectedChat || !activeCanvas) {
+      return;
+    }
+
+    setCanvasPresentationMode(selectedChat.id, activeCanvas.id, mode);
+  }, [activeCanvas, selectedChat, setCanvasPresentationMode]);
 
   const handleChatDragStart = useCallback((chatId: string) => {
     setDraggedChatId(chatId);
@@ -2470,11 +2482,13 @@ export default function App() {
                 canvases={selectedCanvases}
                 activeCanvasId={activeCanvasId}
                 canvas={activeCanvas ?? null}
+                presentationMode={activeCanvasPresentationMode}
                 selection={canvasSelection}
                 selectionPromptDraft={selectionPromptDraft}
                 saving={Boolean(activeCanvas && savingCanvasId === activeCanvas.id)}
                 onClose={handleCloseCanvas}
                 onCreateCanvas={() => void handleCreateBlankCanvas()}
+                onSetPresentationMode={handleSetCanvasPresentationMode}
                 onSelectCanvas={(canvasId) => {
                   if (!selectedChat) {
                     return;

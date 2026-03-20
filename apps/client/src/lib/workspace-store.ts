@@ -3,11 +3,14 @@ import { createStore } from 'https://esm.sh/zustand@5.0.8/vanilla?target=es2022'
 
 import type { CanvasArtifact, CanvasSelection } from './types.js';
 
+export type CanvasPresentationMode = 'preview' | 'edit';
+
 export type CanvasEditorSessionState = {
   draftContent: string | null;
   selection: CanvasSelection | null;
   selectionPromptDraft: string;
   pendingRemoteApply: boolean;
+  presentationMode: CanvasPresentationMode;
 };
 
 export type ThreadCanvasWorkspaceState = {
@@ -57,6 +60,7 @@ type WorkspaceStore = {
   setSelectionPromptDraft: (threadId: string, canvasId: string, draft: string) => void;
   clearCanvasSelection: (threadId: string, canvasId: string) => void;
   setCanvasPendingRemoteApply: (threadId: string, canvasId: string, pending: boolean) => void;
+  setCanvasPresentationMode: (threadId: string, canvasId: string, mode: CanvasPresentationMode) => void;
 };
 
 export const INITIAL_CANVAS_EDITOR_SESSION_STATE: Readonly<CanvasEditorSessionState> = Object.freeze({
@@ -64,13 +68,17 @@ export const INITIAL_CANVAS_EDITOR_SESSION_STATE: Readonly<CanvasEditorSessionSt
   selection: null,
   selectionPromptDraft: '',
   pendingRemoteApply: false,
+  presentationMode: 'preview',
 });
 
-const createCanvasEditorSessionState = (): CanvasEditorSessionState => ({
+const createCanvasEditorSessionState = (
+  presentationMode: CanvasPresentationMode = 'preview',
+): CanvasEditorSessionState => ({
   draftContent: null,
   selection: null,
   selectionPromptDraft: '',
   pendingRemoteApply: false,
+  presentationMode,
 });
 
 export const INITIAL_THREAD_CANVAS_STATE: Readonly<ThreadCanvasWorkspaceState> = Object.freeze({
@@ -120,6 +128,9 @@ const resolveActiveCanvasId = (
   return canvases[0]?.id ?? null;
 };
 
+const defaultCanvasPresentationMode = (kind: CanvasArtifact['kind']) =>
+  kind === 'code' ? 'edit' : 'preview';
+
 const updateThreadState = (
   threads: Record<string, ThreadCanvasWorkspaceState>,
   threadId: string,
@@ -138,16 +149,20 @@ const normalizeEditorSessions = (
   options?: {
     consumePendingRemoteApply?: boolean;
     contentResetCanvasIds?: ReadonlySet<string>;
+    previewCanvasIds?: ReadonlySet<string>;
   },
 ) => {
   const consumePendingRemoteApply = options?.consumePendingRemoteApply ?? false;
   return Object.fromEntries(
     canvases.map((canvas) => {
-      const current = currentSessions[canvas.id] ?? createCanvasEditorSessionState();
+      const current =
+        currentSessions[canvas.id] ?? createCanvasEditorSessionState(defaultCanvasPresentationMode(canvas.kind));
       const shouldResetContentState = options?.contentResetCanvasIds?.has(canvas.id) ?? false;
+      const shouldPreviewCanvas =
+        canvas.kind !== 'code' && (options?.previewCanvasIds?.has(canvas.id) ?? false);
 
       if (consumePendingRemoteApply && current.pendingRemoteApply) {
-        return [canvas.id, createCanvasEditorSessionState()];
+        return [canvas.id, createCanvasEditorSessionState(defaultCanvasPresentationMode(canvas.kind))];
       }
 
       const draftContent = shouldResetContentState ? null : current.draftContent === canvas.content ? null : current.draftContent;
@@ -167,6 +182,12 @@ const normalizeEditorSessions = (
           selection: hasValidSelection ? current.selection : null,
           selectionPromptDraft: hasValidSelection ? current.selectionPromptDraft : '',
           pendingRemoteApply: consumePendingRemoteApply ? false : current.pendingRemoteApply,
+          presentationMode:
+            canvas.kind === 'code'
+              ? 'edit'
+              : shouldPreviewCanvas && current.presentationMode !== 'edit'
+                ? 'preview'
+                : current.presentationMode,
         },
       ];
     }),
@@ -179,6 +200,20 @@ const getContentResetCanvasIds = (currentCanvases: CanvasArtifact[], nextCanvase
     nextCanvases.flatMap((canvas) => {
       const current = currentById.get(canvas.id);
       return current && current.content !== canvas.content ? [canvas.id] : [];
+    }),
+  );
+};
+
+const getPreviewCanvasIds = (currentCanvases: CanvasArtifact[], nextCanvases: CanvasArtifact[]) => {
+  const currentById = new Map(currentCanvases.map((canvas) => [canvas.id, canvas]));
+  return new Set(
+    nextCanvases.flatMap((canvas) => {
+      if (canvas.kind === 'code') {
+        return [];
+      }
+
+      const current = currentById.get(canvas.id);
+      return !current || current.content !== canvas.content ? [canvas.id] : [];
     }),
   );
 };
@@ -201,6 +236,7 @@ const nextThreadState = (
     consumePendingRemoteApply?: boolean;
     contentResetCanvasIds?: ReadonlySet<string>;
     manualPaneCloseCanvasIds?: string[] | null;
+    previewCanvasIds?: ReadonlySet<string>;
   },
 ): ThreadCanvasWorkspaceState => ({
   canvases,
@@ -257,6 +293,7 @@ const workspaceStore = createStore<WorkspaceStore>()((set) => ({
         const activeCanvasId = resolveActiveCanvasId(canvases, current.activeCanvasId);
         return nextThreadState(current, canvases, activeCanvasId, current.isPaneOpen, {
           contentResetCanvasIds: getContentResetCanvasIds(current.canvases, incomingCanvases),
+          previewCanvasIds: getPreviewCanvasIds(current.canvases, incomingCanvases),
         });
       }),
     })),
@@ -306,6 +343,7 @@ const workspaceStore = createStore<WorkspaceStore>()((set) => ({
           consumePendingRemoteApply: true,
           contentResetCanvasIds: getContentResetCanvasIds(current.canvases, payload.canvases),
           manualPaneCloseCanvasIds: payload.open === true && shouldHonorRemoteOpen ? null : current.manualPaneCloseCanvasIds,
+          previewCanvasIds: getPreviewCanvasIds(current.canvases, payload.canvases),
         });
       }),
     })),
@@ -429,6 +467,26 @@ const workspaceStore = createStore<WorkspaceStore>()((set) => ({
           },
         },
       })),
+    })),
+  setCanvasPresentationMode: (threadId, canvasId, mode) =>
+    set((state) => ({
+      threads: updateThreadState(state.threads, threadId, (current) => {
+        const canvas = current.canvases.find((item) => item.id === canvasId);
+        const nextMode = canvas?.kind === 'code' ? 'edit' : mode;
+        return {
+          ...current,
+          editorSessions: {
+            ...normalizeEditorSessions(current.editorSessions, current.canvases),
+            [canvasId]: {
+              ...(current.editorSessions[canvasId] ??
+                createCanvasEditorSessionState(
+                  canvas ? defaultCanvasPresentationMode(canvas.kind) : 'preview',
+                )),
+              presentationMode: nextMode,
+            },
+          },
+        };
+      }),
     })),
 }));
 

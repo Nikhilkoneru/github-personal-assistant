@@ -1427,13 +1427,13 @@ fn build_canvas_tools() -> Value {
     json!([
         {
             "name": "canvas_create",
-            "description": "Create a new canvas artifact for the current chat thread and store its full content.",
+            "description": "Create a new canvas artifact for the current chat thread and store its full content. For document or notes canvases, default to well-structured markdown unless the user explicitly asks for another format.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": { "type": "string", "description": "Human-friendly title for the new canvas." },
-                    "kind": { "type": "string", "description": "Canvas type such as document, code, or notes." },
-                    "content": { "type": "string", "description": "Full initial content to store in the canvas." },
+                    "kind": { "type": "string", "description": "Canvas type such as document, code, or notes. Use document or notes for markdown-style drafts and prose." },
+                    "content": { "type": "string", "description": "Full initial content to store in the canvas. For document and notes canvases, prefer final markdown structure with headings, lists, emphasis, tables, and code fences when useful." },
                     "open": { "type": "boolean", "description": "Whether the UI should open the canvas after creation." }
                 },
                 "required": ["title", "content"]
@@ -1442,13 +1442,13 @@ fn build_canvas_tools() -> Value {
         },
         {
             "name": "canvas_update",
-            "description": "Update an existing canvas artifact. Keep the canvas open after updates; use canvas_close separately only when the user explicitly wants it closed. When selectionReplace is true, content replaces ONLY the user-selected range and should match the surrounding document's structure and formatting; otherwise content replaces the entire document.",
+            "description": "Update an existing canvas artifact. Keep the canvas open after updates; use canvas_close separately only when the user explicitly wants it closed. When selectionReplace is true, content replaces ONLY the user-selected range and should match the surrounding document's structure and formatting; otherwise content replaces the entire document. For document or notes canvases, preserve and extend valid markdown unless the user explicitly requests another format.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "canvasId": { "type": "string", "description": "ID of the canvas to update." },
                     "title": { "type": "string", "description": "Optional replacement title." },
-                    "content": { "type": "string", "description": "Replacement text. If selectionReplace is true this should be only the replacement text for the selected range and should fit the surrounding document; otherwise it replaces the full document." },
+                    "content": { "type": "string", "description": "Replacement text. If selectionReplace is true this should be only the replacement text for the selected range and should fit the surrounding document; otherwise it replaces the full document. For document and notes canvases, prefer markdown that preserves the surrounding structure." },
                     "selectionReplace": { "type": "boolean", "description": "When true, content replaces only the currently selected text range instead of the whole document." }
                 },
                 "required": ["content"]

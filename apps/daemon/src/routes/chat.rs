@@ -533,6 +533,18 @@ fn canvas_update_sync_open_state() -> Option<bool> {
     Some(true)
 }
 
+fn uses_markdown_canvas_format(kind: &str) -> bool {
+    matches!(kind, "document" | "notes")
+}
+
+fn canvas_format_guidance(kind: &str) -> &'static str {
+    if uses_markdown_canvas_format(kind) {
+        "For document and notes canvases, default to well-structured markdown with headings, lists, emphasis, blockquotes, tables, and fenced code blocks when they improve the result. Only use plain text or another format if the user explicitly asks for it.\n"
+    } else {
+        ""
+    }
+}
+
 fn canvas_content_update_from_request<'a>(
     args: &'a CanvasUpdateToolArgs,
     canvas_context: Option<&'a CanvasPromptContext>,
@@ -581,8 +593,10 @@ fn build_canvas_prompt(prompt: &str, canvas: Option<&CanvasPromptContext>) -> St
             "The user wants to create or draft in a {kind} canvas titled \"{title}\"{identifier}.\n\
 Prefer using the `canvas.create` tool to create the artifact instead of returning the draft as plain chat text.\n\
 When you call the tool, provide the full canvas content and a suitable title/kind.\n\
+{format_guidance}\
 If you also send a chat reply after the tool call, keep it brief and reference the canvas naturally.\n\n\
-User request:\n{prompt}"
+User request:\n{prompt}",
+            format_guidance = canvas_format_guidance(kind)
         ),
         "update" => {
             if let Some(selection) = canvas.selection.as_ref() {
@@ -620,6 +634,7 @@ User request:\n{prompt}"
                     <<<SELECTION\n{selection_text}\nSELECTION\n\
                     <<<AFTER\n{after_context}\nAFTER\n\n\
                     Selected range (UTF-16 offsets {start}–{end}).\n\n\
+                    {format_guidance}\
                     IMPORTANT: Treat the current canvas content as the source of truth for tone, formatting, markdown structure, indentation, heading/list/code conventions, and surrounding context unless the user explicitly asks to change them.\n\
                     IMPORTANT: Call `canvas_update` with `selectionReplace: true` and set `content` to ONLY the replacement text for the selected range. Your replacement must fit seamlessly between the BEFORE and AFTER context. \
                     Do not close the canvas as part of this update; the edited canvas should remain open after the tool call.\n\
@@ -631,14 +646,18 @@ User request:\n{prompt}"
                     end = selection.end,
                     selection_text = selection.text,
                     after_context = after_context,
+                    format_guidance = canvas_format_guidance(kind),
                 )
             } else {
                 format!(
                     "The user wants to revise a {kind} canvas titled \"{title}\"{identifier}.\n\
 Current canvas content:\n<<<CANVAS\n{current_content}\nCANVAS\n\n\
 Prefer using the `canvas.update` tool for the actual mutation. Send the full updated canvas content in the tool call.\n\
+{format_guidance}\
+Treat the current canvas content as the source of truth for tone, formatting, markdown structure, indentation, heading/list/code conventions, and surrounding context unless the user explicitly asks to change them.\n\
 If you also reply in chat, keep it brief and do not repeat the full document inline.\n\n\
-User request:\n{prompt}"
+User request:\n{prompt}",
+                    format_guidance = canvas_format_guidance(kind)
                 )
             }
         }
@@ -1418,6 +1437,23 @@ mod tests {
         assert!(prompt.contains("ONLY the replacement text for the selected range"));
         assert!(prompt.contains("Selected range (UTF-16 offsets"));
         assert!(prompt.contains("should remain open after the tool call"));
+    }
+
+    #[test]
+    fn document_create_prompt_prefers_markdown_structure() {
+        let canvas = CanvasPromptContext {
+            mode: "create".to_string(),
+            canvas_id: Some("canvas-1".to_string()),
+            title: Some("Release notes".to_string()),
+            kind: Some("document".to_string()),
+            current_content: None,
+            selection: None,
+        };
+
+        let prompt = build_canvas_prompt("Draft release notes for the new version.", Some(&canvas));
+
+        assert!(prompt.contains("default to well-structured markdown"));
+        assert!(prompt.contains("headings, lists, emphasis, blockquotes, tables, and fenced code blocks"));
     }
 
     #[test]

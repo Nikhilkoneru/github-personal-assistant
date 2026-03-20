@@ -1,15 +1,19 @@
 import type { CanvasArtifact, CanvasSelection } from '../lib/types.js';
+import type { CanvasPresentationMode } from '../lib/workspace-store.js';
 import { CanvasEditor } from './canvas-editor.js';
+import { MarkdownContent } from './markdown-content.js';
 
 type CanvasPaneProps = {
   canvases: CanvasArtifact[];
   activeCanvasId: string | null;
   canvas: CanvasArtifact | null;
+  presentationMode: CanvasPresentationMode;
   selection: CanvasSelection | null;
   selectionPromptDraft: string;
   saving?: boolean;
   onClose: () => void;
   onCreateCanvas?: () => void;
+  onSetPresentationMode: (mode: CanvasPresentationMode) => void;
   onSelectCanvas: (canvasId: string) => void;
   onTitleChange: (canvasId: string, title: string) => void;
   onContentChange: (canvasId: string, content: string) => void;
@@ -25,11 +29,13 @@ export function CanvasPane({
   canvases,
   activeCanvasId,
   canvas,
+  presentationMode,
   selection,
   selectionPromptDraft,
   saving,
   onClose,
   onCreateCanvas,
+  onSetPresentationMode,
   onSelectCanvas,
   onTitleChange: _onTitleChange,
   onContentChange,
@@ -40,6 +46,8 @@ export function CanvasPane({
   onCopy,
   selectionSubmitDisabled,
 }: CanvasPaneProps) {
+  const canPreview = canvas?.kind !== 'code';
+
   return (
     <aside className="canvas-pane">
       <div className="canvas-header">
@@ -57,6 +65,26 @@ export function CanvasPane({
         <div className="canvas-header-actions">
           {canvas ? (
             <>
+              {canPreview ? (
+                <div className="canvas-mode-toggle" aria-label="Canvas presentation mode">
+                  <button
+                    type="button"
+                    aria-pressed={presentationMode === 'preview'}
+                    className={`canvas-mode-btn${presentationMode === 'preview' ? ' canvas-mode-btn--active' : ''}`}
+                    onClick={() => onSetPresentationMode('preview')}
+                  >
+                    Preview
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={presentationMode === 'edit'}
+                    className={`canvas-mode-btn${presentationMode === 'edit' ? ' canvas-mode-btn--active' : ''}`}
+                    onClick={() => onSetPresentationMode('edit')}
+                  >
+                    Edit
+                  </button>
+                </div>
+              ) : null}
               {onCreateCanvas ? (
                 <button type="button" className="canvas-header-btn" onClick={onCreateCanvas} aria-label="Create canvas" title="New canvas">
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8.75 1.75a.75.75 0 0 0-1.5 0v5.5h-5.5a.75.75 0 0 0 0 1.5h5.5v5.5a.75.75 0 0 0 1.5 0v-5.5h5.5a.75.75 0 0 0 0-1.5h-5.5v-5.5z"/></svg>
@@ -93,19 +121,25 @@ export function CanvasPane({
 
       {canvas ? (
         <div className="canvas-document">
-          <CanvasEditor
-            key={`${canvas.id}:${canvas.kind}`}
-            canvas={canvas}
-            content={canvas.content}
-            selection={selection}
-            selectionPromptDraft={selectionPromptDraft}
-            onContentChange={(content) => onContentChange(canvas.id, content)}
-            onSelectionChange={(nextSelection) => onSelectionChange(canvas.id, nextSelection)}
-            onSelectionPromptChange={onSelectionPromptChange}
-            onSubmitSelectionPrompt={onSubmitSelectionPrompt}
-            onClearSelection={onClearSelection}
-            selectionSubmitDisabled={selectionSubmitDisabled}
-          />
+          {canPreview && presentationMode === 'preview' ? (
+            <div className="canvas-markdown-preview">
+              <MarkdownContent content={canvas.content} className="canvas-markdown markdown-content" />
+            </div>
+          ) : (
+            <CanvasEditor
+              key={`${canvas.id}:${canvas.kind}`}
+              canvas={canvas}
+              content={canvas.content}
+              selection={selection}
+              selectionPromptDraft={selectionPromptDraft}
+              onContentChange={(content) => onContentChange(canvas.id, content)}
+              onSelectionChange={(nextSelection) => onSelectionChange(canvas.id, nextSelection)}
+              onSelectionPromptChange={onSelectionPromptChange}
+              onSubmitSelectionPrompt={onSubmitSelectionPrompt}
+              onClearSelection={onClearSelection}
+              selectionSubmitDisabled={selectionSubmitDisabled}
+            />
+          )}
         </div>
       ) : (
         <div className="canvas-empty canvas-empty--editor">

@@ -1311,6 +1311,33 @@ button.msg-canvas-edit-chip:hover {
   align-items: center;
   gap: 2px;
 }
+.canvas-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+.canvas-mode-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.canvas-mode-btn:hover {
+  color: var(--text);
+}
+.canvas-mode-btn--active {
+  background: rgba(56, 139, 253, 0.16);
+  color: var(--text);
+}
 .canvas-header-btn {
   display: flex;
   align-items: center;
@@ -1392,6 +1419,15 @@ button.msg-canvas-edit-chip:hover {
   line-height: 1.75;
   max-width: 720px;
   margin: 0 auto;
+}
+.canvas-markdown-preview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.canvas-markdown-preview .canvas-markdown {
+  box-sizing: border-box;
+  padding: 40px 56px 96px;
 }
 .canvas-markdown h1, .canvas-markdown h2, .canvas-markdown h3 {
   margin: 1em 0 0.5em;
@@ -1876,6 +1912,7 @@ button.msg-canvas-edit-chip:hover {
     border-top: none;
   }
   .canvas-editor-shell { --canvas-editor-padding: 24px 20px 84px; }
+  .canvas-markdown-preview .canvas-markdown { padding: 24px 20px 84px; }
   .canvas-strip { padding: 10px; }
   .canvas-selection-inline {
     width: calc(100% - 24px);

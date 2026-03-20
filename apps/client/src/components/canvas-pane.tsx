@@ -1,7 +1,5 @@
-import { useState, useRef, useCallback, useEffect, type CSSProperties } from 'react';
-
 import type { CanvasArtifact, CanvasSelection } from '../lib/types.js';
-import { MarkdownContent } from './markdown-content.js';
+import { CanvasEditor } from './canvas-editor.js';
 
 type CanvasPaneProps = {
   canvases: CanvasArtifact[];
@@ -15,7 +13,6 @@ type CanvasPaneProps = {
   onSelectCanvas: (canvasId: string) => void;
   onTitleChange: (canvasId: string, title: string) => void;
   onContentChange: (canvasId: string, content: string) => void;
-  onContentBlur: (canvasId: string, title: string, content: string) => void;
   onSelectionChange: (canvasId: string, selection: CanvasSelection | null) => void;
   onSelectionPromptChange: (value: string) => void;
   onSubmitSelectionPrompt: () => void;
@@ -23,91 +20,6 @@ type CanvasPaneProps = {
   onCopy: (canvas: CanvasArtifact) => void;
   selectionSubmitDisabled?: boolean;
 };
-
-type InlineComposerPosition = {
-  left: number;
-  top: number;
-};
-
-const INLINE_COMPOSER_MAX_WIDTH = 320;
-const INLINE_COMPOSER_HEIGHT = 56;
-const MIRROR_STYLE_PROPERTIES = [
-  'box-sizing',
-  'padding-top',
-  'padding-right',
-  'padding-bottom',
-  'padding-left',
-  'border-top-width',
-  'border-right-width',
-  'border-bottom-width',
-  'border-left-width',
-  'font-family',
-  'font-size',
-  'font-style',
-  'font-variant',
-  'font-weight',
-  'letter-spacing',
-  'line-height',
-  'tab-size',
-  'text-indent',
-  'text-rendering',
-  'text-transform',
-  'word-spacing',
-] as const;
-
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-
-const getTextareaSelectionAnchor = (textarea: HTMLTextAreaElement, position: number) => {
-  if (typeof document === 'undefined' || textarea.clientWidth === 0) {
-    return null;
-  }
-
-  const computed = window.getComputedStyle(textarea);
-  const mirror = document.createElement('div');
-  mirror.setAttribute('aria-hidden', 'true');
-  mirror.style.position = 'absolute';
-  mirror.style.top = '0';
-  mirror.style.left = '-9999px';
-  mirror.style.visibility = 'hidden';
-  mirror.style.pointerEvents = 'none';
-  mirror.style.whiteSpace = 'pre-wrap';
-  mirror.style.overflowWrap = 'break-word';
-  mirror.style.wordBreak = 'break-word';
-  mirror.style.width = `${textarea.clientWidth}px`;
-
-  for (const property of MIRROR_STYLE_PROPERTIES) {
-    mirror.style.setProperty(property, computed.getPropertyValue(property));
-  }
-
-  const beforeSelection = textarea.value.slice(0, position);
-  mirror.textContent = beforeSelection;
-  if (beforeSelection.endsWith('\n')) {
-    mirror.textContent += '\u200b';
-  }
-
-  const marker = document.createElement('span');
-  marker.textContent = textarea.value.slice(position, position + 1) || '\u200b';
-  mirror.appendChild(marker);
-  document.body.appendChild(mirror);
-
-  const anchor = {
-    left: marker.offsetLeft - textarea.scrollLeft,
-    top: marker.offsetTop - textarea.scrollTop,
-    lineHeight: Number.parseFloat(computed.lineHeight) || marker.offsetHeight || 20,
-  };
-
-  document.body.removeChild(mirror);
-  return anchor;
-};
-
-function SendSelectionIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M22 2 11 13" />
-      <path d="m22 2-7 20-4-9-9-4Z" />
-    </svg>
-  );
-}
 
 export function CanvasPane({
   canvases,
@@ -119,9 +31,8 @@ export function CanvasPane({
   onClose,
   onCreateCanvas,
   onSelectCanvas,
-  onTitleChange,
+  onTitleChange: _onTitleChange,
   onContentChange,
-  onContentBlur,
   onSelectionChange,
   onSelectionPromptChange,
   onSubmitSelectionPrompt,
@@ -129,131 +40,6 @@ export function CanvasPane({
   onCopy,
   selectionSubmitDisabled,
 }: CanvasPaneProps) {
-  const [editing, setEditing] = useState(false);
-  const [inlineComposerPosition, setInlineComposerPosition] = useState<InlineComposerPosition | null>(null);
-  const canvasDocumentRef = useRef<HTMLDivElement>(null);
-  const editorRef = useRef<HTMLTextAreaElement>(null);
-  const selectionComposerRef = useRef<HTMLDivElement>(null);
-  const selectionPromptRef = useRef<HTMLInputElement>(null);
-
-  const enterEditMode = useCallback(() => {
-    setEditing(true);
-    requestAnimationFrame(() => editorRef.current?.focus());
-  }, []);
-
-  const exitEditMode = useCallback(() => {
-    if (canvas) {
-      onContentBlur(canvas.id, canvas.title, canvas.content);
-    }
-    setEditing(false);
-  }, [canvas, onContentBlur]);
-
-  const updateInlineComposerPosition = useCallback(() => {
-    const textarea = editorRef.current;
-    const container = canvasDocumentRef.current;
-    if (!textarea || !container || !selection) {
-      setInlineComposerPosition(null);
-      return;
-    }
-
-    const anchor = getTextareaSelectionAnchor(textarea, selection.end);
-    if (!anchor) {
-      setInlineComposerPosition(null);
-      return;
-    }
-
-    const rawLeft = textarea.offsetLeft + anchor.left;
-    const maxLeft = Math.max(12, container.clientWidth - INLINE_COMPOSER_MAX_WIDTH - 12);
-    const left = clamp(rawLeft, 12, maxLeft);
-
-    const belowTop = textarea.offsetTop + anchor.top + anchor.lineHeight + 10;
-    const aboveTop = textarea.offsetTop + anchor.top - INLINE_COMPOSER_HEIGHT - 10;
-    const visibleTop = container.scrollTop + 12;
-    const visibleBottom = container.scrollTop + container.clientHeight - INLINE_COMPOSER_HEIGHT - 12;
-    const top = belowTop <= visibleBottom ? belowTop : Math.max(visibleTop, aboveTop);
-
-    setInlineComposerPosition({ left, top });
-  }, [selection]);
-
-  const dismissSelection = useCallback(
-    (options?: { refocusEditor?: boolean }) => {
-      onClearSelection();
-      if (options?.refocusEditor) {
-        requestAnimationFrame(() => editorRef.current?.focus());
-      }
-    },
-    [onClearSelection],
-  );
-
-  const handleEditorBlur = useCallback(() => {
-    requestAnimationFrame(() => {
-      const activeElement = document.activeElement;
-      if (selectionComposerRef.current?.contains(activeElement)) {
-        return;
-      }
-      exitEditMode();
-    });
-  }, [exitEditMode]);
-
-  const handleInlineComposerBlur = useCallback(() => {
-    requestAnimationFrame(() => {
-      const activeElement = document.activeElement;
-      if (selectionComposerRef.current?.contains(activeElement)) {
-        return;
-      }
-      if (activeElement === editorRef.current) {
-        return;
-      }
-      onClearSelection();
-      exitEditMode();
-    });
-  }, [exitEditMode, onClearSelection]);
-
-  useEffect(() => {
-    setEditing(false);
-    setInlineComposerPosition(null);
-  }, [canvas?.id]);
-
-  useEffect(() => {
-    if (!editing || !selection) {
-      setInlineComposerPosition(null);
-      return;
-    }
-
-    updateInlineComposerPosition();
-    const textarea = editorRef.current;
-    const container = canvasDocumentRef.current;
-    if (!textarea || !container) {
-      return;
-    }
-
-    const handleViewportChange = () => updateInlineComposerPosition();
-    textarea.addEventListener('scroll', handleViewportChange);
-    container.addEventListener('scroll', handleViewportChange);
-    window.addEventListener('resize', handleViewportChange);
-    return () => {
-      textarea.removeEventListener('scroll', handleViewportChange);
-      container.removeEventListener('scroll', handleViewportChange);
-      window.removeEventListener('resize', handleViewportChange);
-    };
-  }, [canvas?.content, editing, selection, updateInlineComposerPosition]);
-
-  useEffect(() => {
-    if (!selection || !editing || !inlineComposerPosition) {
-      return;
-    }
-    requestAnimationFrame(() => {
-      selectionPromptRef.current?.focus();
-    });
-  }, [editing, inlineComposerPosition, selection, canvas?.id]);
-
-  const inlineComposerStyle: CSSProperties | undefined = inlineComposerPosition
-    ? {
-        left: `${inlineComposerPosition.left}px`,
-        top: `${inlineComposerPosition.top}px`,
-      }
-    : undefined;
-
   return (
     <aside className="canvas-pane">
       <div className="canvas-header">
@@ -306,83 +92,26 @@ export function CanvasPane({
       ) : null}
 
       {canvas ? (
-        <div ref={canvasDocumentRef} className="canvas-document">
-          {editing ? (
-            <>
-              <textarea
-                ref={editorRef}
-                className="canvas-editor"
-                value={canvas.content}
-                onChange={(event) => onContentChange(canvas.id, event.target.value)}
-                onBlur={handleEditorBlur}
-                onSelect={(event) => {
-                  const target = event.currentTarget;
-                  const start = target.selectionStart ?? 0;
-                  const end = target.selectionEnd ?? 0;
-                  if (end <= start) {
-                    onSelectionChange(canvas.id, null);
-                    return;
-                  }
-                  onSelectionChange(canvas.id, { start, end, text: target.value.slice(start, end) });
-                }}
-                spellCheck={canvas.kind !== 'code'}
-                aria-label={`Editing ${canvas.title}`}
-              />
-
-              {selection && inlineComposerStyle ? (
-                <div
-                  ref={selectionComposerRef}
-                  className="canvas-selection-inline"
-                  style={inlineComposerStyle}
-                >
-                  <input
-                    ref={selectionPromptRef}
-                    className="canvas-selection-inline-input"
-                    value={selectionPromptDraft}
-                    onChange={(event) => onSelectionPromptChange(event.target.value)}
-                    onBlur={handleInlineComposerBlur}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault();
-                        onSubmitSelectionPrompt();
-                      } else if (event.key === 'Escape') {
-                        event.preventDefault();
-                        dismissSelection({ refocusEditor: true });
-                      }
-                    }}
-                    placeholder="Edit selected text…"
-                    aria-label={`Edit selected text in ${canvas.title}`}
-                  />
-                  <button
-                    type="button"
-                    className="canvas-selection-inline-send"
-                    onClick={onSubmitSelectionPrompt}
-                    disabled={selectionSubmitDisabled || !selectionPromptDraft.trim()}
-                    aria-label="Apply selection edit"
-                    title="Apply selection edit"
-                  >
-                    <SendSelectionIcon />
-                  </button>
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <div className="canvas-rendered" onClick={enterEditMode} role="button" tabIndex={0} aria-label="Click to edit">
-              <MarkdownContent content={canvas.content} className="canvas-markdown" />
-            </div>
-          )}
+        <div className="canvas-document">
+          <CanvasEditor
+            key={`${canvas.id}:${canvas.kind}`}
+            canvas={canvas}
+            content={canvas.content}
+            selection={selection}
+            selectionPromptDraft={selectionPromptDraft}
+            onContentChange={(content) => onContentChange(canvas.id, content)}
+            onSelectionChange={(nextSelection) => onSelectionChange(canvas.id, nextSelection)}
+            onSelectionPromptChange={onSelectionPromptChange}
+            onSubmitSelectionPrompt={onSubmitSelectionPrompt}
+            onClearSelection={onClearSelection}
+            selectionSubmitDisabled={selectionSubmitDisabled}
+          />
         </div>
       ) : (
         <div className="canvas-empty canvas-empty--editor">
           Ask the assistant to create or update a canvas, then edit it here like a document.
         </div>
       )}
-
-      {canvas && !editing ? (
-        <button type="button" className="canvas-fab" onClick={enterEditMode} aria-label="Edit document" title="Edit">
-          <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M11.013 1.427a1.75 1.75 0 012.474 0l1.086 1.086a1.75 1.75 0 010 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 01-.927-.928l.929-3.25a1.75 1.75 0 01.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 00-.354 0L3.463 11.098a.25.25 0 00-.064.108l-.563 1.97 1.971-.564a.25.25 0 00.108-.064l8.61-8.61a.25.25 0 000-.354L12.427 2.487z"/></svg>
-        </button>
-      ) : null}
     </aside>
   );
 }

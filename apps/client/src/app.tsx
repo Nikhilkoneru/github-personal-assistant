@@ -43,7 +43,12 @@ import {
   uploadAttachment,
 } from './lib/api.js';
 import { clearApiUrlOverride, getApiUrlOverride, getDefaultApiUrl, setApiUrlOverride } from './lib/api-config.js';
-import { getThreadCanvasState, getWorkspacePaneMode, useWorkspaceStore } from './lib/workspace-store.js';
+import {
+  getThreadCanvasState,
+  getWorkspacePaneMode,
+  INITIAL_CANVAS_EDITOR_SESSION_STATE,
+  useWorkspaceStore,
+} from './lib/workspace-store.js';
 import { useAuth } from './providers/auth-provider.js';
 
 type LocalChat = ThreadDetail & {
@@ -351,9 +356,11 @@ export default function App() {
   const openCanvas = useWorkspaceStore((state) => state.openCanvas);
   const closeCanvas = useWorkspaceStore((state) => state.closeCanvas);
   const setActiveCanvas = useWorkspaceStore((state) => state.setActiveCanvas);
+  const setCanvasDraft = useWorkspaceStore((state) => state.setCanvasDraft);
   const setCanvasSelection = useWorkspaceStore((state) => state.setCanvasSelection);
   const setSelectionPromptDraft = useWorkspaceStore((state) => state.setSelectionPromptDraft);
   const clearCanvasSelection = useWorkspaceStore((state) => state.clearCanvasSelection);
+  const setCanvasPendingRemoteApply = useWorkspaceStore((state) => state.setCanvasPendingRemoteApply);
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
@@ -393,6 +400,7 @@ export default function App() {
   const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
   const toolsMenuRef = useRef<HTMLDivElement>(null);
   const [savingCanvasId, setSavingCanvasId] = useState<string | null>(null);
+  const persistCanvasTimersRef = useRef<Map<string, number>>(new Map());
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -658,13 +666,24 @@ export default function App() {
   );
   const selectedCanvases = selectedThreadCanvasState.canvases;
   const activeCanvasId = selectedThreadCanvasState.activeCanvasId ?? selectedCanvases[0]?.id ?? null;
-  const activeCanvas = useMemo(
+  const activeCanvasBase = useMemo(
     () => selectedCanvases.find((canvas) => canvas.id === activeCanvasId) ?? selectedCanvases[0] ?? null,
     [activeCanvasId, selectedCanvases],
   );
+  const activeCanvasSession = activeCanvasId
+    ? selectedThreadCanvasState.editorSessions[activeCanvasId] ?? INITIAL_CANVAS_EDITOR_SESSION_STATE
+    : INITIAL_CANVAS_EDITOR_SESSION_STATE;
+  const activeCanvas = useMemo(
+    () => (!activeCanvasBase
+      ? null
+      : activeCanvasSession.draftContent !== null
+        ? { ...activeCanvasBase, content: activeCanvasSession.draftContent }
+        : activeCanvasBase),
+    [activeCanvasBase, activeCanvasSession.draftContent],
+  );
   const canvasPaneOpen = selectedThreadCanvasState.isPaneOpen;
-  const canvasSelection = selectedThreadCanvasState.selection;
-  const selectionPromptDraft = selectedThreadCanvasState.selectionPromptDraft;
+  const canvasSelection = activeCanvasSession.selection;
+  const selectionPromptDraft = activeCanvasSession.selectionPromptDraft;
 
   useEffect(() => {
     if (canvasPaneOpen) {
@@ -689,6 +708,22 @@ export default function App() {
 
     media.addListener(handleChange);
     return () => media.removeListener(handleChange);
+  }, []);
+
+  const cancelCanvasPersist = useCallback((threadId: string, canvasId: string) => {
+    const key = `${threadId}:${canvasId}`;
+    const timeoutId = persistCanvasTimersRef.current.get(key);
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+      persistCanvasTimersRef.current.delete(key);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    for (const timeoutId of persistCanvasTimersRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    persistCanvasTimersRef.current.clear();
   }, []);
 
   // Close tools menu on outside click
@@ -1098,53 +1133,75 @@ export default function App() {
     });
   }, [patchCanvasForThread, selectedChat]);
 
-  const handleCanvasContentChange = useCallback((canvasId: string, content: string) => {
-    if (!selectedChat) {
-      return;
-    }
-    patchCanvasForThread(selectedChat.id, canvasId, {
-      content,
-      updatedAt: new Date().toISOString(),
-    });
-  }, [patchCanvasForThread, selectedChat]);
-
-  const handleCanvasSelectionChange = useCallback((canvasId: string, nextSelection: CanvasSelection | null) => {
-    if (!selectedChat || activeCanvasId !== canvasId) {
-      return;
-    }
-    setCanvasSelection(selectedChat.id, nextSelection);
-  }, [activeCanvasId, selectedChat, setCanvasSelection]);
-
-  const handleClearCanvasSelection = useCallback(() => {
-    if (!selectedChat) {
-      return;
-    }
-    clearCanvasSelection(selectedChat.id);
-  }, [clearCanvasSelection, selectedChat]);
-
-  const handlePersistCanvas = useCallback(
-    async (canvasId: string, title: string, content: string) => {
-      if (!session || !selectedChat || !canvasId || !title.trim()) {
+  const persistCanvasContent = useCallback(
+    async (threadId: string, canvasId: string, title: string, content: string) => {
+      if (!session || !canvasId || !title.trim()) {
         return;
       }
+
       setSavingCanvasId(canvasId);
       setError(null);
       try {
         const payload = await updateCanvas(
-          selectedChat.id,
+          threadId,
           canvasId,
           { title: title.trim(), content },
           session.sessionToken,
         );
-        upsertCanvasForThread(selectedChat.id, payload.canvas);
+        upsertCanvasForThread(threadId, payload.canvas);
       } catch (canvasError) {
         setError(canvasError instanceof Error ? canvasError.message : 'Unable to save canvas.');
       } finally {
         setSavingCanvasId((current) => (current === canvasId ? null : current));
       }
     },
-    [selectedChat, session, upsertCanvasForThread],
+    [session, upsertCanvasForThread],
   );
+
+  const scheduleCanvasPersist = useCallback(
+    (threadId: string, canvasId: string, title: string, content: string) => {
+      cancelCanvasPersist(threadId, canvasId);
+
+      if (typeof window === 'undefined') {
+        void persistCanvasContent(threadId, canvasId, title, content);
+        return;
+      }
+
+      const key = `${threadId}:${canvasId}`;
+      const timeoutId = window.setTimeout(() => {
+        persistCanvasTimersRef.current.delete(key);
+        void persistCanvasContent(threadId, canvasId, title, content);
+      }, 700);
+      persistCanvasTimersRef.current.set(key, timeoutId);
+    },
+    [cancelCanvasPersist, persistCanvasContent],
+  );
+
+  const handleCanvasContentChange = useCallback((canvasId: string, content: string) => {
+    if (!selectedChat) {
+      return;
+    }
+    const canvas = selectedCanvases.find((item) => item.id === canvasId);
+    if (!canvas) {
+      return;
+    }
+    setCanvasDraft(selectedChat.id, canvasId, content);
+    scheduleCanvasPersist(selectedChat.id, canvasId, canvas.title, content);
+  }, [scheduleCanvasPersist, selectedCanvases, selectedChat, setCanvasDraft]);
+
+  const handleCanvasSelectionChange = useCallback((canvasId: string, nextSelection: CanvasSelection | null) => {
+    if (!selectedChat || activeCanvasId !== canvasId) {
+      return;
+    }
+    setCanvasSelection(selectedChat.id, canvasId, nextSelection);
+  }, [activeCanvasId, selectedChat, setCanvasSelection]);
+
+  const handleClearCanvasSelection = useCallback(() => {
+    if (!selectedChat || !activeCanvasId) {
+      return;
+    }
+    clearCanvasSelection(selectedChat.id, activeCanvasId);
+  }, [activeCanvasId, clearCanvasSelection, selectedChat]);
 
   const handleCopyCanvas = useCallback(async (canvas: CanvasArtifact) => {
     try {
@@ -1529,6 +1586,7 @@ export default function App() {
             return;
           }
           if (event.type === 'canvas_sync') {
+            event.canvases.forEach((canvas) => cancelCanvasPersist(chatId, canvas.id));
             applyCanvasSync(chatId, {
               canvases: event.canvases,
               activeCanvasId: event.activeCanvasId,
@@ -1663,6 +1721,7 @@ export default function App() {
     defaultModel,
     draft,
     applyCanvasSync,
+    cancelCanvasPersist,
     selectedChat,
     session,
     signOut,
@@ -1671,15 +1730,28 @@ export default function App() {
   ]);
 
   const handleSubmitSelectionPrompt = useCallback(async () => {
-    if (!selectedChat || !canvasSelection || !selectionPromptDraft.trim()) {
+    if (!session || !selectedChat || !activeCanvas || !canvasSelection || !selectionPromptDraft.trim() || streamingChatIds.has(selectedChat.id)) {
       return;
     }
 
     const selection = canvasSelection;
     const prompt = selectionPromptDraft.trim();
-    clearCanvasSelection(selectedChat.id);
+    cancelCanvasPersist(selectedChat.id, activeCanvas.id);
+    setCanvasPendingRemoteApply(selectedChat.id, activeCanvas.id, true);
+    clearCanvasSelection(selectedChat.id, activeCanvas.id);
     await handleSend(prompt, 'update', selection);
-  }, [canvasSelection, clearCanvasSelection, handleSend, selectedChat, selectionPromptDraft]);
+  }, [
+    activeCanvas,
+    cancelCanvasPersist,
+    canvasSelection,
+    clearCanvasSelection,
+    handleSend,
+    selectedChat,
+    selectionPromptDraft,
+    session,
+    setCanvasPendingRemoteApply,
+    streamingChatIds,
+  ]);
 
   const handleAbortStreaming = useCallback(async () => {
     if (!session || !selectedChat || !streamingChatIds.has(selectedChat.id)) {
@@ -2338,13 +2410,12 @@ export default function App() {
                 }}
                 onTitleChange={handleCanvasTitleChange}
                 onContentChange={handleCanvasContentChange}
-                onContentBlur={(canvasId, title, content) => void handlePersistCanvas(canvasId, title, content)}
                 onSelectionChange={handleCanvasSelectionChange}
                 onSelectionPromptChange={(value) => {
-                  if (!selectedChat) {
+                  if (!selectedChat || !activeCanvasId) {
                     return;
                   }
-                  setSelectionPromptDraft(selectedChat.id, value);
+                  setSelectionPromptDraft(selectedChat.id, activeCanvasId, value);
                 }}
                 onSubmitSelectionPrompt={() => void handleSubmitSelectionPrompt()}
                 onClearSelection={handleClearCanvasSelection}

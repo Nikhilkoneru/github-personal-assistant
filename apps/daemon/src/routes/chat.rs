@@ -529,6 +529,12 @@ fn build_prompt_text(prompt: &str, canvas: Option<&CanvasPromptContext>) -> Stri
     build_canvas_prompt(prompt, canvas)
 }
 
+fn canvas_not_found_error(canvas_id: &str) -> String {
+    format!(
+        "Canvas {canvas_id} was not found in this chat thread. Canvas IDs are thread-local."
+    )
+}
+
 fn canvas_update_sync_open_state() -> Option<bool> {
     Some(true)
 }
@@ -1040,10 +1046,15 @@ async fn handle_canvas_tool_call(
 
     let response = match result {
         Ok(result) => result,
-        Err(error) => tool_failure_result(
-            error.to_string(),
-            "The requested canvas action could not be completed.",
-        ),
+        Err(error) => {
+            let error_message = error.to_string();
+            let text_result = if error_message.contains("was not found in this chat thread") {
+                "That canvas was not found in the current chat thread. Canvas IDs are thread-local, so use `canvas_list` to inspect this thread's canvases or `canvas_create` to make a new one here."
+            } else {
+                "The requested canvas action could not be completed."
+            };
+            tool_failure_result(error_message, text_result)
+        }
     };
 
     if let Err(error) = conn
@@ -1127,7 +1138,7 @@ async fn handle_canvas_update_tool(
         Some(source_copilot_session_id),
     )
     .await?
-    .with_context(|| format!("Canvas {canvas_id} was not found"))?;
+    .with_context(|| canvas_not_found_error(canvas_id))?;
     emit_canvas_sync(
         tx,
         &state.db,
@@ -1178,7 +1189,7 @@ async fn handle_canvas_open_tool(
         .iter()
         .find(|canvas| canvas.id == args.canvas_id)
         .cloned()
-        .with_context(|| format!("Canvas {} was not found", args.canvas_id))?;
+        .with_context(|| canvas_not_found_error(&args.canvas_id))?;
     let active_canvas_id = canvas.id.clone();
     let _ = tx
         .send(Ok(make_event(&json!({
@@ -1396,7 +1407,8 @@ fn extract_usage_from_event(data: &serde_json::Value) -> Option<serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::{
-        build_canvas_prompt, canvas_content_update_from_request, canvas_update_sync_open_state,
+        build_canvas_prompt, canvas_content_update_from_request, canvas_not_found_error,
+        canvas_update_sync_open_state,
         CanvasPromptContext, CanvasSelectionInput, CanvasUpdateToolArgs,
     };
     use crate::canvas_selection::build_selection_context_excerpt;
@@ -1534,5 +1546,14 @@ mod tests {
     #[test]
     fn canvas_updates_always_keep_the_canvas_open() {
         assert_eq!(canvas_update_sync_open_state(), Some(true));
+    }
+
+    #[test]
+    fn missing_canvas_errors_explain_thread_local_scope() {
+        let error = canvas_not_found_error("canvas-123");
+
+        assert!(error.contains("canvas-123"));
+        assert!(error.contains("this chat thread"));
+        assert!(error.contains("thread-local"));
     }
 }

@@ -1427,7 +1427,7 @@ fn build_canvas_tools() -> Value {
     json!([
         {
             "name": "canvas_create",
-            "description": "Create a new canvas artifact for the current chat thread and store its full content. For document or notes canvases, default to well-structured markdown unless the user explicitly asks for another format.",
+            "description": "Create a new canvas artifact for the current chat thread only and store its full content. Never refer to or reuse canvas IDs from other chat threads. For document or notes canvases, default to well-structured markdown unless the user explicitly asks for another format.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1442,7 +1442,7 @@ fn build_canvas_tools() -> Value {
         },
         {
             "name": "canvas_update",
-            "description": "Update an existing canvas artifact. Keep the canvas open after updates; use canvas_close separately only when the user explicitly wants it closed. When selectionReplace is true, content replaces ONLY the user-selected range and should match the surrounding document's structure and formatting; otherwise content replaces the entire document. For document or notes canvases, preserve and extend valid markdown unless the user explicitly requests another format.",
+            "description": "Update an existing canvas artifact in the current chat thread only. Never refer to or reuse canvas IDs from other chat threads. Keep the canvas open after updates; use canvas_close separately only when the user explicitly wants it closed. When selectionReplace is true, content replaces ONLY the user-selected range and should match the surrounding document's structure and formatting; otherwise content replaces the entire document. For document or notes canvases, preserve and extend valid markdown unless the user explicitly requests another format.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1457,7 +1457,7 @@ fn build_canvas_tools() -> Value {
         },
         {
             "name": "canvas_list",
-            "description": "List the canvases available in the current chat thread.",
+            "description": "List the canvases available in the current chat thread only. Canvases from other chat threads are not available here.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -1466,7 +1466,7 @@ fn build_canvas_tools() -> Value {
         },
         {
             "name": "canvas_open",
-            "description": "Open an existing canvas in the UI so the user can focus on it.",
+            "description": "Open an existing canvas from the current chat thread in the UI so the user can focus on it. Canvases from other chat threads cannot be opened here.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1478,7 +1478,7 @@ fn build_canvas_tools() -> Value {
         },
         {
             "name": "canvas_close",
-            "description": "Close the canvas pane in the UI without deleting any saved canvas.",
+            "description": "Close the canvas pane in the UI for the current chat thread without deleting any saved canvas.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -1495,6 +1495,30 @@ fn tool_failure_result(error: String, text_result_for_llm: &str) -> Value {
         "error": error,
         "toolTelemetry": {},
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_canvas_tools;
+
+    #[test]
+    fn canvas_tools_describe_thread_local_scope() {
+        let tools = build_canvas_tools();
+        let canvas_update_description = tools[1]["description"]
+            .as_str()
+            .expect("canvas_update description should be a string");
+        let canvas_list_description = tools[2]["description"]
+            .as_str()
+            .expect("canvas_list description should be a string");
+        let canvas_open_description = tools[3]["description"]
+            .as_str()
+            .expect("canvas_open description should be a string");
+
+        assert!(canvas_update_description.contains("current chat thread only"));
+        assert!(canvas_update_description.contains("other chat threads"));
+        assert!(canvas_list_description.contains("other chat threads are not available"));
+        assert!(canvas_open_description.contains("other chat threads cannot be opened"));
+    }
 }
 
 fn permission_result_from_option_id(option_id: &str) -> Value {

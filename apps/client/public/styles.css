@@ -44,14 +44,9 @@ button { cursor: pointer; }
 .app-shell {
   height: 100vh;
   height: 100dvh;
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  display: flex;
   overflow: hidden;
   padding-top: env(safe-area-inset-top, 0px);
-}
-
-.app-shell--canvas-focus {
-  grid-template-columns: 1fr;
 }
 
 /* ── Sidebar ── */
@@ -60,6 +55,9 @@ button { cursor: pointer; }
   flex-direction: column;
   background: var(--panel);
   border-right: 1px solid var(--border);
+  flex: 0 0 280px;
+  width: 280px;
+  max-width: 280px;
   height: 100%;
   overflow: hidden;
 }
@@ -305,24 +303,34 @@ button { cursor: pointer; }
 /* ── Main Panel ── */
 .main-panel {
   height: 100%;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: var(--bg);
 }
 
 .main-body {
+  flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
-  /* Stretch chat-column to fill available height so composer pins to bottom */
   display: flex;
   flex-direction: column;
 }
 
 .main-body--with-canvas {
-  display: grid;
-  grid-template-columns: minmax(300px, 35%) minmax(0, 1fr);
-  gap: 0;
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.main-body--with-canvas .chat-column {
+  flex: 0 1 clamp(320px, 36vw, 540px);
+  border-right: 1px solid var(--border);
+}
+
+.main-body--with-canvas .canvas-pane {
+  flex: 1 1 0;
 }
 
 /* Chat column — messages + composer as one flex unit */
@@ -986,6 +994,11 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
   background: rgba(56, 139, 253, 0.18);
 }
 
+.msg-canvas-link--active {
+  background: rgba(56, 139, 253, 0.24);
+  color: #dbeafe;
+}
+
 /* Message footer */
 .msg-footer {
   display: flex;
@@ -1141,86 +1154,6 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(56, 139, 253, 0.15);
 }
 
-.selection-prompt-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid rgba(56, 139, 253, 0.2);
-  border-radius: 16px;
-  background: linear-gradient(180deg, rgba(56, 139, 253, 0.12), rgba(56, 139, 253, 0.06));
-}
-
-.selection-prompt-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.selection-prompt-title {
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--text);
-}
-
-.selection-prompt-meta {
-  margin-top: 2px;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-
-.selection-prompt-dismiss {
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-weight: 600;
-  padding: 0;
-}
-
-.selection-prompt-dismiss:hover {
-  color: var(--text);
-}
-
-.selection-prompt-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.selection-prompt-input {
-  flex: 1;
-  min-width: 0;
-  border: 1px solid rgba(240, 246, 252, 0.08);
-  border-radius: 999px;
-  background: rgba(13, 17, 23, 0.7);
-  color: var(--text);
-  padding: 10px 14px;
-  outline: none;
-  font-size: 0.88rem;
-}
-
-.selection-prompt-input:focus {
-  border-color: rgba(56, 139, 253, 0.5);
-  box-shadow: 0 0 0 1px rgba(56, 139, 253, 0.15);
-}
-
-.selection-prompt-submit {
-  border: none;
-  border-radius: 999px;
-  background: var(--primary-strong);
-  color: #fff;
-  padding: 10px 14px;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.selection-prompt-submit:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
 .composer-input {
   flex: 1;
   min-width: 0;
@@ -1278,12 +1211,7 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
   border-left: 1px solid var(--border);
   background: var(--bg);
   position: relative;
-  animation: canvas-slide-in 200ms ease;
-}
-
-@keyframes canvas-slide-in {
-  from { opacity: 0; transform: translateX(12px); }
-  to   { opacity: 1; transform: translateX(0); }
+  min-height: 0;
 }
 
 /* ── Canvas header: X | title | actions ── */
@@ -1344,6 +1272,56 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
   transition: background 100ms, color 100ms;
 }
 .canvas-header-btn:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+
+.canvas-strip {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.canvas-strip-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  max-width: 220px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  flex: 0 0 auto;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.canvas-strip-item:hover {
+  color: var(--text);
+  border-color: rgba(56, 139, 253, 0.28);
+}
+
+.canvas-strip-item--active {
+  color: var(--text);
+  border-color: rgba(56, 139, 253, 0.35);
+  background: rgba(56, 139, 253, 0.12);
+}
+
+.canvas-strip-item-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.canvas-strip-item-meta {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
 
 /* ── Canvas document body ── */
 .canvas-document {
@@ -1458,6 +1436,84 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
 .canvas-empty--editor {
   padding: 40px 56px;
   text-align: center;
+}
+
+.canvas-selection-dock {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(56, 139, 253, 0.08), rgba(56, 139, 253, 0.04));
+}
+
+.canvas-selection-dock-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.canvas-selection-dock-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.canvas-selection-dock-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.canvas-selection-dock-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.canvas-selection-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(240, 246, 252, 0.08);
+  border-radius: 999px;
+  background: rgba(13, 17, 23, 0.72);
+  color: var(--text);
+  padding: 10px 14px;
+  outline: none;
+  font-size: 0.88rem;
+}
+
+.canvas-selection-input:focus {
+  border-color: rgba(56, 139, 253, 0.5);
+  box-shadow: 0 0 0 1px rgba(56, 139, 253, 0.15);
+}
+
+.canvas-selection-dismiss,
+.canvas-selection-apply {
+  border: none;
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.canvas-selection-dismiss {
+  background: transparent;
+  color: var(--muted);
+}
+
+.canvas-selection-dismiss:hover {
+  color: var(--text);
+}
+
+.canvas-selection-apply {
+  background: var(--primary-strong);
+  color: #fff;
+}
+
+.canvas-selection-apply:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .composer-send:hover { transform: scale(1.05); }
@@ -1758,7 +1814,6 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
 /* ── Responsive ── */
 @media (max-width: 960px) {
   .app-shell {
-    grid-template-columns: 1fr;
     padding-top: env(safe-area-inset-top, 0px);
   }
   .sidebar {
@@ -1785,42 +1840,42 @@ details.tool-activity[open] > :not(.tool-activity-collapse-summary) {
   .message-scroll { padding: 12px; }
   .composer { padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
   .main-body--with-canvas {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) auto;
-  }
-  .main-body--with-canvas .canvas-pane {
-    order: 1;
-    min-height: 0;
-    border-left: none;
+    flex-direction: column;
   }
   .main-body--with-canvas .chat-column {
-    order: 2;
-    flex: 0 0 auto;
-    border-top: 1px solid var(--border);
-    background: linear-gradient(180deg, rgba(13, 17, 23, 0.96), var(--bg));
+    flex: 1 1 auto;
+    max-width: none;
+    border-right: none;
   }
-  .main-body--with-canvas .chat-column .message-scroll {
+  .main-body--canvas-only .chat-column {
     display: none;
   }
-  .main-body--with-canvas .composer {
-    padding-top: 10px;
+  .main-body--with-canvas .canvas-pane {
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+  .main-body--canvas-only .canvas-pane {
+    flex: 1 1 auto;
+    border-top: none;
   }
   .canvas-rendered { padding: 24px 20px; }
   .canvas-editor { padding: 24px 20px; }
   .canvas-selection-hint { padding: 8px 20px 16px; }
-  .status-grid { grid-template-columns: 1fr; }
-  .modal-actions { flex-direction: column; }
-  .modal-actions > * { width: 100%; }
-  .selection-prompt-input {
+  .canvas-strip { padding: 10px; }
+  .canvas-selection-input {
     font-size: 16px;
   }
-  .selection-prompt-bar {
+  .canvas-selection-dock-bar {
     flex-direction: column;
     align-items: stretch;
   }
-  .selection-prompt-submit {
+  .canvas-selection-dismiss,
+  .canvas-selection-apply {
     width: 100%;
   }
+  .status-grid { grid-template-columns: 1fr; }
+  .modal-actions { flex-direction: column; }
+  .modal-actions > * { width: 100%; }
 }
 
 @media (max-width: 640px) {

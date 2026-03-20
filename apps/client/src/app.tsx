@@ -43,6 +43,7 @@ import {
   uploadAttachment,
 } from './lib/api.js';
 import { clearApiUrlOverride, getApiUrlOverride, getDefaultApiUrl, setApiUrlOverride } from './lib/api-config.js';
+import { getThreadCanvasState, getWorkspacePaneMode, useWorkspaceStore } from './lib/workspace-store.js';
 import { useAuth } from './providers/auth-provider.js';
 
 type LocalChat = ThreadDetail & {
@@ -326,12 +327,27 @@ function IconButton({
 
 export default function App() {
   const { authCapabilities, openPendingGitHubVerification, pendingDeviceAuth, session, signIn, signOut, isRestoring } = useAuth();
+  const selectedChatId = useWorkspaceStore((state) => state.selectedChatId);
+  const setSelectedChatId = useWorkspaceStore((state) => state.setSelectedChatId);
+  const draft = useWorkspaceStore((state) => state.composerDraft);
+  const setDraft = useWorkspaceStore((state) => state.setComposerDraft);
+  const isNarrowViewport = useWorkspaceStore((state) => state.isNarrowViewport);
+  const setIsNarrowViewport = useWorkspaceStore((state) => state.setIsNarrowViewport);
+  const resetWorkspace = useWorkspaceStore((state) => state.resetWorkspace);
+  const replaceThreadCanvases = useWorkspaceStore((state) => state.replaceThreadCanvases);
+  const upsertCanvasForThread = useWorkspaceStore((state) => state.upsertCanvasForThread);
+  const patchCanvasForThread = useWorkspaceStore((state) => state.patchCanvasForThread);
+  const applyCanvasSync = useWorkspaceStore((state) => state.applyCanvasSync);
+  const openCanvas = useWorkspaceStore((state) => state.openCanvas);
+  const closeCanvas = useWorkspaceStore((state) => state.closeCanvas);
+  const setActiveCanvas = useWorkspaceStore((state) => state.setActiveCanvas);
+  const setCanvasSelection = useWorkspaceStore((state) => state.setCanvasSelection);
+  const setSelectionPromptDraft = useWorkspaceStore((state) => state.setSelectionPromptDraft);
+  const clearCanvasSelection = useWorkspaceStore((state) => state.clearCanvasSelection);
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [chats, setChats] = useState<LocalChat[]>([]);
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectWorkspacePath, setNewProjectWorkspacePath] = useState('');
   const [loading, setLoading] = useState(true);
@@ -364,21 +380,12 @@ export default function App() {
   const [respondingToUserInputId, setRespondingToUserInputId] = useState<string | null>(null);
   const [respondingToPermissionId, setRespondingToPermissionId] = useState<string | null>(null);
   const [userInputDrafts, setUserInputDrafts] = useState<Record<string, string>>({});
-  const [canvasesByThread, setCanvasesByThread] = useState<Record<string, CanvasArtifact[]>>({});
-  const [activeCanvasIdByThread, setActiveCanvasIdByThread] = useState<Record<string, string | null>>({});
-  const [canvasPaneOpenByThread, setCanvasPaneOpenByThread] = useState<Record<string, boolean>>({});
-  const [canvasSelectionByThread, setCanvasSelectionByThread] = useState<Record<string, CanvasSelection | null>>({});
-  const [selectionPromptDraftByThread, setSelectionPromptDraftByThread] = useState<Record<string, string>>({});
   const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
   const toolsMenuRef = useRef<HTMLDivElement>(null);
   const [savingCanvasId, setSavingCanvasId] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const selectionPromptInputRef = useRef<HTMLInputElement | null>(null);
-  const [isNarrowViewport, setIsNarrowViewport] = useState(
-    () => (typeof window !== 'undefined' ? window.matchMedia('(max-width: 960px)').matches : false),
-  );
   const chatsRef = useRef<LocalChat[]>([]);
   chatsRef.current = chats;
   const selectedChatIdRef = useRef<string | null>(null);
@@ -419,18 +426,12 @@ export default function App() {
       setProjects([]);
       setModels([]);
       setChats([]);
-      setSelectedChatId(null);
-      setCanvasesByThread({});
-      setActiveCanvasIdByThread({});
-      setCanvasPaneOpenByThread({});
-      setCanvasSelectionByThread({});
-      setSelectionPromptDraftByThread({});
-      setDraft('');
+      resetWorkspace();
       setNewProjectWorkspacePath('');
       setGeneralChatWorkspaceDraft('');
       setProjectWorkspaceDrafts({});
     }
-  }, [session]);
+  }, [resetWorkspace, session]);
 
   useEffect(() => {
     setGeneralChatWorkspaceDraft(copilotPreferences.generalChatWorkspacePath);
@@ -538,46 +539,6 @@ export default function App() {
     });
   }, []);
 
-  const replaceThreadCanvases = useCallback((threadId: string, canvases: CanvasArtifact[]) => {
-    setCanvasesByThread((current) => ({ ...current, [threadId]: canvases }));
-    setActiveCanvasIdByThread((current) => {
-      const existing = current[threadId];
-      const nextActiveId =
-        existing && canvases.some((canvas) => canvas.id === existing)
-          ? existing
-          : canvases[0]?.id ?? null;
-      return { ...current, [threadId]: nextActiveId };
-    });
-  }, []);
-
-  const upsertCanvasForThread = useCallback((threadId: string, canvas: CanvasArtifact) => {
-    setCanvasesByThread((current) => {
-      const existing = current[threadId] ?? [];
-      const next = existing.some((item) => item.id === canvas.id)
-        ? existing.map((item) => (item.id === canvas.id ? canvas : item))
-        : [canvas, ...existing];
-      return {
-        ...current,
-        [threadId]: [...next].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-      };
-    });
-  }, []);
-
-  const removeCanvasForThread = useCallback((threadId: string, canvasId: string) => {
-    setCanvasesByThread((current) => ({
-      ...current,
-      [threadId]: (current[threadId] ?? []).filter((canvas) => canvas.id !== canvasId),
-    }));
-    setActiveCanvasIdByThread((current) => ({
-      ...current,
-      [threadId]: current[threadId] === canvasId ? null : current[threadId] ?? null,
-    }));
-    setCanvasSelectionByThread((current) => ({
-      ...current,
-      [threadId]: null,
-    }));
-  }, []);
-
   const loadThreadCanvases = useCallback(
     async (threadId: string) => {
       if (!session) {
@@ -679,18 +640,21 @@ export default function App() {
   }, [isRestoring, load]);
 
   const selectedChat = useMemo(() => chats.find((chat) => chat.id === selectedChatId) ?? chats[0] ?? null, [chats, selectedChatId]);
-  const selectedCanvases = useMemo(
-    () => (selectedChat ? canvasesByThread[selectedChat.id] ?? [] : []),
-    [canvasesByThread, selectedChat],
+  const selectedThreadCanvasState = useWorkspaceStore(
+    useCallback((state) => getThreadCanvasState(state, selectedChat?.id), [selectedChat?.id]),
   );
-  const activeCanvasId = selectedChat ? activeCanvasIdByThread[selectedChat.id] ?? selectedCanvases[0]?.id ?? null : null;
+  const workspacePaneMode = useWorkspaceStore(
+    useCallback((state) => getWorkspacePaneMode(state, selectedChat?.id), [selectedChat?.id]),
+  );
+  const selectedCanvases = selectedThreadCanvasState.canvases;
+  const activeCanvasId = selectedThreadCanvasState.activeCanvasId ?? selectedCanvases[0]?.id ?? null;
   const activeCanvas = useMemo(
     () => selectedCanvases.find((canvas) => canvas.id === activeCanvasId) ?? selectedCanvases[0] ?? null,
     [activeCanvasId, selectedCanvases],
   );
-  const canvasPaneOpen = selectedChat ? canvasPaneOpenByThread[selectedChat.id] ?? false : false;
-  const canvasSelection = selectedChat ? canvasSelectionByThread[selectedChat.id] ?? null : null;
-  const selectionPromptDraft = selectedChat ? selectionPromptDraftByThread[selectedChat.id] ?? '' : '';
+  const canvasPaneOpen = selectedThreadCanvasState.isPaneOpen;
+  const canvasSelection = selectedThreadCanvasState.selection;
+  const selectionPromptDraft = selectedThreadCanvasState.selectionPromptDraft;
 
   useEffect(() => {
     if (canvasPaneOpen) {
@@ -716,12 +680,6 @@ export default function App() {
     media.addListener(handleChange);
     return () => media.removeListener(handleChange);
   }, []);
-
-  useEffect(() => {
-    if (canvasSelection) {
-      selectionPromptInputRef.current?.focus();
-    }
-  }, [canvasSelection, selectedChat?.id]);
 
   // Close tools menu on outside click
   useEffect(() => {
@@ -980,8 +938,6 @@ export default function App() {
       const payload = await createThread(projectId ? { projectId } : {}, session.sessionToken);
       upsertThreadDetail({ ...payload.thread, messages: [] });
       replaceThreadCanvases(payload.thread.id, []);
-      setCanvasPaneOpenByThread((current) => ({ ...current, [payload.thread.id]: false }));
-      setCanvasSelectionByThread((current) => ({ ...current, [payload.thread.id]: null }));
       setSelectedChatId(payload.thread.id);
       setDraft('');
       setSidebarOpen(false);
@@ -1054,9 +1010,7 @@ export default function App() {
       setSidebarOpen(false);
       setToolsMenuOpen(false);
       if (isNarrowViewport) {
-        setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: false }));
-        setCanvasSelectionByThread((current) => ({ ...current, [chatId]: null }));
-        setSelectionPromptDraftByThread((current) => ({ ...current, [chatId]: '' }));
+        closeCanvas(chatId);
       }
       const chat = chats.find((item) => item.id === chatId);
       if (chat?.hasLoadedMessages) {
@@ -1068,7 +1022,7 @@ export default function App() {
         setError(loadError instanceof Error ? loadError.message : 'Unable to load that chat.');
       }
     },
-    [chats, isNarrowViewport, loadThreadDetail],
+    [chats, closeCanvas, isNarrowViewport, loadThreadDetail, setSelectedChatId],
   );
 
   const handleOpenCanvas = useCallback(
@@ -1076,24 +1030,31 @@ export default function App() {
       if (!selectedChat) {
         return;
       }
-      setCanvasPaneOpenByThread((current) => ({ ...current, [selectedChat.id]: true }));
-      if (canvasId) {
-        setActiveCanvasIdByThread((current) => ({ ...current, [selectedChat.id]: canvasId }));
-      } else if (selectedCanvases[0]) {
-        setActiveCanvasIdByThread((current) => ({ ...current, [selectedChat.id]: current[selectedChat.id] ?? selectedCanvases[0].id }));
-      }
+      openCanvas(selectedChat.id, canvasId);
     },
-    [selectedChat, selectedCanvases],
+    [openCanvas, selectedChat],
   );
 
   const handleCloseCanvas = useCallback(() => {
     if (!selectedChat) {
       return;
     }
-    setCanvasPaneOpenByThread((current) => ({ ...current, [selectedChat.id]: false }));
-    setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: null }));
-    setSelectionPromptDraftByThread((current) => ({ ...current, [selectedChat.id]: '' }));
-  }, [selectedChat]);
+    closeCanvas(selectedChat.id);
+  }, [closeCanvas, selectedChat]);
+
+  const handleToggleCanvas = useCallback(
+    (canvasId: string) => {
+      if (!selectedChat) {
+        return;
+      }
+      if (canvasPaneOpen && activeCanvasId === canvasId) {
+        closeCanvas(selectedChat.id);
+        return;
+      }
+      openCanvas(selectedChat.id, canvasId);
+    },
+    [activeCanvasId, canvasPaneOpen, closeCanvas, openCanvas, selectedChat],
+  );
 
   const handleCreateBlankCanvas = useCallback(async () => {
     if (!session || !selectedChat) {
@@ -1111,51 +1072,45 @@ export default function App() {
         session.sessionToken,
       );
       upsertCanvasForThread(selectedChat.id, payload.canvas);
-      setActiveCanvasIdByThread((current) => ({ ...current, [selectedChat.id]: payload.canvas.id }));
-      setCanvasPaneOpenByThread((current) => ({ ...current, [selectedChat.id]: true }));
+      openCanvas(selectedChat.id, payload.canvas.id);
     } catch (canvasError) {
       setError(canvasError instanceof Error ? canvasError.message : 'Unable to create canvas.');
     }
-  }, [selectedCanvases.length, selectedChat, session, upsertCanvasForThread]);
+  }, [openCanvas, selectedCanvases.length, selectedChat, session, upsertCanvasForThread]);
 
   const handleCanvasTitleChange = useCallback((canvasId: string, title: string) => {
     if (!selectedChat) {
       return;
     }
-    setCanvasesByThread((current) => ({
-      ...current,
-      [selectedChat.id]: (current[selectedChat.id] ?? []).map((canvas) =>
-        canvas.id === canvasId ? { ...canvas, title, updatedAt: new Date().toISOString() } : canvas,
-      ),
-    }));
-  }, [selectedChat]);
+    patchCanvasForThread(selectedChat.id, canvasId, {
+      title,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [patchCanvasForThread, selectedChat]);
 
   const handleCanvasContentChange = useCallback((canvasId: string, content: string) => {
     if (!selectedChat) {
       return;
     }
-    setCanvasesByThread((current) => ({
-      ...current,
-      [selectedChat.id]: (current[selectedChat.id] ?? []).map((canvas) =>
-        canvas.id === canvasId ? { ...canvas, content, updatedAt: new Date().toISOString() } : canvas,
-      ),
-    }));
-  }, [selectedChat]);
+    patchCanvasForThread(selectedChat.id, canvasId, {
+      content,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [patchCanvasForThread, selectedChat]);
 
   const handleCanvasSelectionChange = useCallback((canvasId: string, nextSelection: CanvasSelection | null) => {
     if (!selectedChat || activeCanvasId !== canvasId) {
       return;
     }
-    setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: nextSelection }));
-  }, [activeCanvasId, selectedChat]);
+    setCanvasSelection(selectedChat.id, nextSelection);
+  }, [activeCanvasId, selectedChat, setCanvasSelection]);
 
   const handleClearCanvasSelection = useCallback(() => {
     if (!selectedChat) {
       return;
     }
-    setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: null }));
-    setSelectionPromptDraftByThread((current) => ({ ...current, [selectedChat.id]: '' }));
-  }, [selectedChat]);
+    clearCanvasSelection(selectedChat.id);
+  }, [clearCanvasSelection, selectedChat]);
 
   const handlePersistCanvas = useCallback(
     async (canvasId: string, title: string, content: string) => {
@@ -1545,20 +1500,13 @@ export default function App() {
             return;
           }
           if (event.type === 'canvas_sync') {
-            replaceThreadCanvases(chatId, event.canvases);
-            if (event.activeCanvasId !== undefined) {
-              setActiveCanvasIdByThread((current) => ({ ...current, [chatId]: event.activeCanvasId ?? null }));
-            }
-            if (event.open !== undefined) {
-              const shouldOpen = event.open;
-                setCanvasPaneOpenByThread((current) => ({ ...current, [chatId]: shouldOpen }));
-                if (!shouldOpen) {
-                  setCanvasSelectionByThread((current) => ({ ...current, [chatId]: null }));
-                  setSelectionPromptDraftByThread((current) => ({ ...current, [chatId]: '' }));
-                }
-              }
-              return;
-            }
+            applyCanvasSync(chatId, {
+              canvases: event.canvases,
+              activeCanvasId: event.activeCanvasId,
+              open: event.open,
+            });
+            return;
+          }
           if (event.type === 'user_input_request') {
             updateChat(chatId, (chat) => ({
               ...chat,
@@ -1685,9 +1633,8 @@ export default function App() {
     canvasSelection,
     defaultModel,
     draft,
-    replaceThreadCanvases,
+    applyCanvasSync,
     selectedChat,
-    setSelectionPromptDraftByThread,
     session,
     signOut,
     streamingChatIds,
@@ -1700,9 +1647,8 @@ export default function App() {
     }
 
     await handleSend(selectionPromptDraft, 'update');
-    setCanvasSelectionByThread((current) => ({ ...current, [selectedChat.id]: null }));
-    setSelectionPromptDraftByThread((current) => ({ ...current, [selectedChat.id]: '' }));
-  }, [canvasSelection, handleSend, selectedChat, selectionPromptDraft]);
+    clearCanvasSelection(selectedChat.id);
+  }, [canvasSelection, clearCanvasSelection, handleSend, selectedChat, selectionPromptDraft]);
 
   const handleAbortStreaming = useCallback(async () => {
     if (!session || !selectedChat || !streamingChatIds.has(selectedChat.id)) {
@@ -1752,6 +1698,8 @@ export default function App() {
     ? daemonRuntime.copilot.version ?? daemonRuntime.copilot.path ?? 'Installed'
     : 'Not found';
   const isSelectedChatStreaming = Boolean(selectedChat && streamingChatIds.has(selectedChat.id));
+  const isCanvasVisible = workspacePaneMode !== 'chat';
+  const mainBodyClassName = `main-body${isCanvasVisible ? ' main-body--with-canvas' : ''}${workspacePaneMode === 'canvas' ? ' main-body--canvas-only' : ''}`;
 
   // Auto-grow composer textarea
   useEffect(() => {
@@ -1945,9 +1893,9 @@ export default function App() {
   }
 
   return (
-    <>
-      {sidebarOpen ? <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} /> : null}
-      <div className={`app-shell${canvasPaneOpen ? ' app-shell--canvas-focus' : ''}`}>
+      <>
+        {sidebarOpen ? <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} /> : null}
+        <div className={`app-shell${isCanvasVisible ? ' app-shell--canvas-focus' : ''}`}>
         <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
           <div className="sidebar-topbar">
             <div>
@@ -2052,9 +2000,9 @@ export default function App() {
           <header className="main-header">
             <div className="main-header-leading">
               <IconButton
-                label={canvasPaneOpen ? 'Show chat list' : 'Open sidebar'}
+                label={isCanvasVisible ? 'Show chat list' : 'Open sidebar'}
                 onClick={() => setSidebarOpen(true)}
-                className={`mobile-menu-trigger${canvasPaneOpen ? ' mobile-menu-trigger--visible' : ''}`}
+                className={`mobile-menu-trigger${isCanvasVisible ? ' mobile-menu-trigger--visible' : ''}`}
               >
                 <MenuIcon />
               </IconButton>
@@ -2115,7 +2063,7 @@ export default function App() {
             ) : null}
           </header>
 
-          <div className={`main-body${canvasPaneOpen ? ' main-body--with-canvas' : ''}`}>
+          <div className={mainBodyClassName}>
             {/* Chat column — messages + composer together so they resize as one unit */}
             <div className="chat-column">
               <div className="message-scroll" ref={messagesRef}>
@@ -2141,7 +2089,9 @@ export default function App() {
                                 ? canvasReferencesByUserMessageIndex.get(messageUserMessageIndex)
                                 : undefined
                             }
-                            onOpenCanvas={handleOpenCanvas}
+                            activeCanvasId={activeCanvasId}
+                            isCanvasPaneOpen={canvasPaneOpen}
+                            onToggleCanvas={handleToggleCanvas}
                             isStreaming={
                               streamingChatIds.has(selectedChat.id) &&
                               message.role === 'assistant' &&
@@ -2258,53 +2208,6 @@ export default function App() {
               </div>
             ) : null}
 
-            {canvasPaneOpen && canvasSelection ? (
-              <div className="selection-prompt-card">
-                <div className="selection-prompt-header">
-                  <div>
-                    <div className="selection-prompt-title">Edit selection</div>
-                    <div className="selection-prompt-meta">
-                      {canvasSelection.end - canvasSelection.start} chars selected{activeCanvas ? ` in ${activeCanvas.title}` : ''}
-                    </div>
-                  </div>
-                  <button type="button" className="selection-prompt-dismiss" onClick={handleClearCanvasSelection}>
-                    Dismiss
-                  </button>
-                </div>
-                <div className="selection-prompt-bar">
-                  <input
-                    ref={selectionPromptInputRef}
-                    className="selection-prompt-input"
-                    value={selectionPromptDraft}
-                    onChange={(event) =>
-                      setSelectionPromptDraftByThread((current) => ({
-                        ...current,
-                        [selectedChat!.id]: event.target.value,
-                      }))
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault();
-                        void handleSubmitSelectionPrompt();
-                      } else if (event.key === 'Escape') {
-                        event.preventDefault();
-                        handleClearCanvasSelection();
-                      }
-                    }}
-                    placeholder="How should this selection change?"
-                  />
-                  <button
-                    type="button"
-                    className="selection-prompt-submit"
-                    onClick={() => void handleSubmitSelectionPrompt()}
-                    disabled={!selectionPromptDraft.trim() || isSelectedChatStreaming}
-                  >
-                    Apply
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
             <div className="composer-bar">
               <button
                 type="button"
@@ -2328,6 +2231,20 @@ export default function App() {
                 {toolsMenuOpen ? (
                   <div className="tools-menu">
                     <div className="tools-menu-header">Tools</div>
+                    <button
+                      type="button"
+                      className="tools-menu-item"
+                      onClick={() => {
+                        void handleCreateBlankCanvas();
+                        setToolsMenuOpen(false);
+                      }}
+                    >
+                      <PlusIcon />
+                      <div className="tools-menu-item-copy">
+                        <span className="tools-menu-item-name">New canvas</span>
+                        <span className="tools-menu-item-desc">Create a blank thread canvas</span>
+                      </div>
+                    </button>
                     <button
                       type="button"
                       className={`tools-menu-item${canvasPaneOpen ? ' active' : ''}`}
@@ -2372,17 +2289,36 @@ export default function App() {
               </div>
             </div>{/* end chat-column */}
 
-            {canvasPaneOpen ? (
+            {isCanvasVisible ? (
               <CanvasPane
+                canvases={selectedCanvases}
+                activeCanvasId={activeCanvasId}
                 canvas={activeCanvas ?? null}
                 selection={canvasSelection}
+                selectionPromptDraft={selectionPromptDraft}
                 saving={Boolean(activeCanvas && savingCanvasId === activeCanvas.id)}
                 onClose={handleCloseCanvas}
+                onCreateCanvas={() => void handleCreateBlankCanvas()}
+                onSelectCanvas={(canvasId) => {
+                  if (!selectedChat) {
+                    return;
+                  }
+                  setActiveCanvas(selectedChat.id, canvasId);
+                }}
                 onTitleChange={handleCanvasTitleChange}
                 onContentChange={handleCanvasContentChange}
                 onContentBlur={(canvasId, title, content) => void handlePersistCanvas(canvasId, title, content)}
                 onSelectionChange={handleCanvasSelectionChange}
+                onSelectionPromptChange={(value) => {
+                  if (!selectedChat) {
+                    return;
+                  }
+                  setSelectionPromptDraft(selectedChat.id, value);
+                }}
+                onSubmitSelectionPrompt={() => void handleSubmitSelectionPrompt()}
+                onClearSelection={handleClearCanvasSelection}
                 onCopy={(canvas) => void handleCopyCanvas(canvas)}
+                selectionSubmitDisabled={isSelectedChatStreaming}
               />
             ) : null}
           </div>{/* end main-body */}

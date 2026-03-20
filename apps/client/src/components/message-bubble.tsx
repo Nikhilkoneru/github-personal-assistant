@@ -5,7 +5,9 @@ type MessageBubbleProps = {
   message: ChatMessage;
   isStreaming?: boolean;
   canvasReferences?: CanvasArtifact[];
-  onOpenCanvas?: (canvasId: string) => void;
+  activeCanvasId?: string | null;
+  isCanvasPaneOpen?: boolean;
+  onToggleCanvas?: (canvasId: string) => void;
 };
 
 const formatTime = (value: string) => new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -45,7 +47,14 @@ const summarizeToolActivity = (activity: ChatToolActivity) => {
   return toolStatusLabels[activity.status];
 };
 
-export function MessageBubble({ message, isStreaming, canvasReferences, onOpenCanvas }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  isStreaming,
+  canvasReferences,
+  activeCanvasId,
+  isCanvasPaneOpen,
+  onToggleCanvas,
+}: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const isError = message.role === 'error';
   const isAssistant = message.role === 'assistant';
@@ -203,16 +212,19 @@ export function MessageBubble({ message, isStreaming, canvasReferences, onOpenCa
 
         {canvasReferences?.length ? (
           <div className="msg-attachments">
-            {canvasReferences.map((canvas) => (
-              <button
-                key={canvas.id}
-                type="button"
-                className="msg-canvas-link"
-                onClick={() => onOpenCanvas?.(canvas.id)}
-              >
-                Open canvas: {canvas.title}
-              </button>
-            ))}
+            {canvasReferences.map((canvas) => {
+              const isActiveCanvas = Boolean(isCanvasPaneOpen && activeCanvasId === canvas.id);
+              return (
+                <button
+                  key={canvas.id}
+                  type="button"
+                  className={`msg-canvas-link${isActiveCanvas ? ' msg-canvas-link--active' : ''}`}
+                  onClick={() => onToggleCanvas?.(canvas.id)}
+                >
+                  {isActiveCanvas ? 'Hide canvas:' : 'Open canvas:'} {canvas.title}
+                </button>
+              );
+            })}
           </div>
         ) : null}
 

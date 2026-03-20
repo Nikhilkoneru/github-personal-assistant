@@ -49,6 +49,7 @@ const externalRuntimeFiles = [
   'https://esm.sh/fflate@0.8.2',
   'https://esm.sh/react-markdown@10.1.0?bundle&target=es2022',
   'https://esm.sh/remark-gfm@4.0.1?bundle&target=es2022',
+  'https://esm.sh/zustand@5.0.8/vanilla?target=es2022',
 ];
 const cacheVersion = (() => {
   const hash = createHash('sha1');
